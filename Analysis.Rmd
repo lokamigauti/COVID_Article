@@ -1,0 +1,128 @@
+---
+title: "COVID Derivative Analysis"
+output:
+  html_document:
+    df_print: paged
+---
+
+# Derivative Analysis
+
+```{r}
+library(readr)
+library(knitr)
+time_series <- "https://raw.github.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
+time_series <- read_csv(time_series)
+```
+
+```{r}
+finite.differences <- function(x, y) {
+  if (length(x) != length(y)) {
+    stop('x and y vectors must have equal length')
+  }
+  
+  n <- length(x)
+  
+  # Initialize a vector of length n to enter the derivative approximations
+  fdx <- vector(length = n)
+  
+  # Iterate through the values using the forward differencing method
+  for (i in 2:n) {
+    fdx[i-1] <- (y[i-1] - y[i]) / (x[i-1] - x[i])
+  }
+  
+  # For the last value, since we are unable to perform the forward differencing method 
+  # as only the first n values are known, we use the backward differencing approach
+  # instead. Note this will essentially give the same value as the last iteration 
+  # in the forward differencing method, but it is used as an approximation as we 
+  # don't have any more information
+  fdx[n] <- (y[n] - y[n - 1]) / (x[n] - x[n - 1])
+  
+  return(fdx)
+}
+```
+
+```{r}
+library(plyr)
+library(tidyverse)
+library(stats)
+library(lubridate)
+```
+
+# Analysis
+
+```{r}
+Case <- time_series %>%
+  filter(`Country/Region` == "Brazil") %>% # DEFINE THE REGION
+  t()
+Case <- Case[-c(1,2,3,4),]
+Days <- 1:length(Case)
+date <- seq(as.Date("2020-01-22"), (as.Date("2020-01-22") + days(length(Case)-1)), "days")
+Case <- cbind(Case, Days) %>%
+  as.data.frame() %>%
+  transform(Case = as.character(Case),
+             Days = as.character(Days)) %>%
+  transform(Case = as.numeric(Case),
+             Days = as.numeric(Days))
+Case <- finite.differences(Case$Days, Case$Case) %>%
+  cbind(Case) %>%
+  rename("dCase" = ".") %>%
+  cbind(date)
+
+# Outliers remover
+# outliers <- boxplot(Case$dCase, plot = FALSE)$out
+# Case<- Case[-which(Case$dCase %in% outliers),]
+  
+lo <- loess(Case$dCase~Case$Days, span = 0.5)
+plot(Case$Days, Case$dCase)
+lines(predict(lo), col='red', lwd=2)
+abline(h=0)
+```
+
+```{r}
+Case <- Case %>%
+  transform(SdCase = predict(lo))
+
+Case <- finite.differences(Case$Days, Case$dCase) %>%
+  cbind(Case) %>%
+  rename("ddCase" = ".")
+
+lo <- loess(Case$ddCase~Case$Days, span = 0.5)
+plot(Case$Days, Case$ddCase, ylim = c(-100, 100))
+lines(predict(lo), col='red', lwd=2)
+abline(h=0)
+```
+
+AQI from https://aqicn.org/data-platform/register/
+
+```{r}
+Case <- read_csv("parque-d.pedro ii, são paulo, brazil-air-quality.csv",  # NAME OF AQI DATASET
+    col_types = cols(` pm25` = col_number(),
+        ` co` = col_skip(), 
+        ` no2` = col_number(), 
+        ` o3` = col_number(), 
+        ` pm10` = col_number(), 
+#        ` so2` = col_number(), 
+        date = col_date(format = "%Y/%m/%d")), 
+    trim_ws = FALSE) %>%
+  filter(date <= Case[nrow(Case), "date"]) %>%
+  merge(Case, by = "date", all = TRUE)
+
+# IN THE CASE OF THE LOCAL EPIDEMIC STARTED POST 22/01/2020
+
+CaseCCF <- Case %>% filter(date >= as.Date("2020-01-22") - months(3))
+CaseCCF$dCase[is.na(CaseCCF$dCase)] <- 0
+CaseCCF <- CaseCCF %>% select(" o3", dCase) %>% na.omit()
+ccf(x = CaseCCF$" o3", y = CaseCCF$dCase, type = "correlation", plot = TRUE, lag.max = 20)
+```
+
+
+
+```{r}
+
+
+
+lo <- loess(Case$" pm25"~Case$Days, span = 0.5)
+plot(x = Case$date, y = Case$` pm25`, xlim = c(as.Date("2019-06-01"), as.Date("2020-03-29")))
+lines(predict(lo), col='red', lwd=2)
+```
+
