@@ -62,13 +62,18 @@ if __name__ == '__main__':
     for location in locations.keys():
         coords = locations[location]
         d = dataset.sel(coords, method='nearest')
+        d1 = d.where(d.expver==1, drop=True).squeeze('expver').drop('expver')
+        d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
+        d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
         datasets_by_location.append(d.assign_coords(location_name=location))
+
     datasets_by_location = xr.concat(datasets_by_location, 'location_name')
     datasets_by_location.to_dataframe().to_csv('data/meteorological_variables.csv')
-
+    datasets_by_location.resample(time='1D').mean().to_dataframe().to_csv('data/meteorological_variables_daily_mean.csv')
 
 
     import matplotlib.pyplot as plt
     plt.style.use('seaborn')
     datasets_by_location['uvb'].sel(expver=1).plot.line(x='time')
     plt.show()
+    datasets_by_location['uvb'].sel(expver=1).resample(time='1D').mean().plot.line(x='time')
