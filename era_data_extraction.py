@@ -6,6 +6,17 @@ from pathlib import Path
 
 
 def read_data(path_to_files, vars_filenames):
+    """
+    Method to read and preprocess the ncdf files
+    Parameters
+    ----------
+    path_to_files Path
+    vars_filenames Dict
+
+    Returns xr.DataSet
+    -------
+
+    """
     list_of_arrays = []
     years = [2020]
     for var in vars_filenames.keys():
@@ -24,6 +35,7 @@ def read_data(path_to_files, vars_filenames):
         list_of_arrays.append(array_concat_years)
     dataset = xr.merge(list_of_arrays)
     return dataset
+
 
 if __name__ == '__main__':
 
