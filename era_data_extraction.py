@@ -51,6 +51,10 @@ if __name__ == '__main__':
         'philadelphia': {
             'latitude': 39.95,
             'longitude': -75.13
+        },
+        'daegu': {
+            'latitude': 35.84,
+            'longitude': 128.57,
         }
     }
     path_to_files = Path('~/phd/data/ERA5/')
