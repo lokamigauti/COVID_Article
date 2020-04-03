@@ -42,6 +42,7 @@ if __name__ == '__main__':
     vars_filenames = {  # Dictionary mapping variables and their filenames
         'uv': 'UV_sfc_ERA5_6hr_{year}010100-{year}123118.nc',
         'tmp': 'tmp_2m_ERA5_6hr_{year}010100-{year}123118.nc',
+        'direct_solar_radiation': 'direct_solar_radiation_sfc_ERA5_6hr_{year}010100-{year}123118.nc'
     }
     locations = {
         'new_york': {
