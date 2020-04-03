@@ -12,6 +12,10 @@ library(readr)
 library(knitr)
 time_series <- "https://raw.github.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_global.csv"
 time_series <- read_csv(time_series)
+
+#uv <- read_csv("https://raw.githubusercontent.com/lokamigauti/COVID_Article/master/data/meteorological_variables_daily_mean.csv?token=AKY7ZA4P75ALI7ORWW67LTS6Q5J4Y", col_types = cols(time = col_date(format = "%Y-%m-%d")))
+
+uv <- read_csv("uv.csv", col_types = cols(time = col_date(format = "%Y-%m-%d")))
 ```
 
 ```{r}
@@ -26,8 +30,9 @@ finite.differences <- function(x, y) {
   fdx <- vector(length = n)
   
   # Iterate through the values using the forward differencing method
-  for (i in 2:n) {
+  for (i in 2:(n)) {
     fdx[i-1] <- (y[i-1] - y[i]) / (x[i-1] - x[i])
+    #fdx[i-1] <- (y[i-1] - y[i+1]) / 2*(x[i-1] - x[i])
   }
   
   # For the last value, since we are unable to perform the forward differencing method 
@@ -35,8 +40,8 @@ finite.differences <- function(x, y) {
   # instead. Note this will essentially give the same value as the last iteration 
   # in the forward differencing method, but it is used as an approximation as we 
   # don't have any more information
-  fdx[n] <- (y[n] - y[n - 1]) / (x[n] - x[n - 1])
-  
+  #fdx[n] <- (y[n-1] - y[n]) / (x[n-1] - x[n])
+  fdx[n] <- (y[n] - y[n-1]) / (x[n] - x[n-1])
   return(fdx)
 }
 ```
@@ -52,9 +57,10 @@ library(lubridate)
 
 ```{r}
 Case <- time_series %>%
-  filter(`Country/Region` == "Brazil") %>% # DEFINE THE REGION
+  filter(`Country/Region` == "Korea, South") %>% # DEFINE THE REGION
   t()
-Case <- Case[-c(1,2,3,4),]
+#Case <- Case[-c(1,2,3,4,5,6,7,8,9,10,11),] # US dataset
+Case <- Case[-c(1,2,3,4),] # Global dataset
 Days <- 1:length(Case)
 date <- seq(as.Date("2020-01-22"), (as.Date("2020-01-22") + days(length(Case)-1)), "days")
 Case <- cbind(Case, Days) %>%
@@ -86,21 +92,41 @@ Case <- finite.differences(Case$Days, Case$dCase) %>%
   cbind(Case) %>%
   rename("ddCase" = ".")
 
-lo <- loess(Case$ddCase~Case$Days, span = 0.5)
-plot(Case$Days, Case$ddCase, ylim = c(-100, 100))
+lo <- loess(Case$ddCase~Case$Days, span = 0.6)
+plot(Case$Days, Case$ddCase, ylim = c(-300, 300))
 lines(predict(lo), col='red', lwd=2)
 abline(h=0)
 ```
 
+UV Corr
+
+```{r}
+Case <- uv %>%
+  filter(location_name == "daegu") %>%
+  transmute(date = time, uv = uvb, t=t2m) %>%
+  filter(date <= Case[nrow(Case), "date"]) %>%
+  merge(Case, by = "date", all = TRUE)
+
+CaseCCF <- Case %>% filter(date >= as.Date("2020-01-01"))
+CaseCCF$dCase[is.na(CaseCCF$dCase)] <- 0
+CaseCCF <- CaseCCF %>% select("t", dCase, "uv") %>% na.omit()
+ccf(x = CaseCCF$"t", y = CaseCCF$dCase, type = "correlation", plot = TRUE, lag.max = 50)
+ccf(x = CaseCCF$"uv", y = CaseCCF$dCase, type = "correlation", plot = TRUE, lag.max = 20)
+ccf(x = CaseCCF$"uv", y = CaseCCF$"t", type = "correlation", plot = TRUE, lag.max = 50)
+plot(CaseCCF$uv)
+```
+
+
+
 AQI from https://aqicn.org/data-platform/register/
 
 ```{r}
-Case <- read_csv("parque-d.pedro ii, são paulo, brazil-air-quality.csv",  # NAME OF AQI DATASET
+Case <- read_csv("Philadelfia, camden-spruce st, newjersey, usa-air-quality - Copia.csv",  # NAME OF AQI DATASET
     col_types = cols(` pm25` = col_number(),
         ` co` = col_skip(), 
         ` no2` = col_number(), 
         ` o3` = col_number(), 
-        ` pm10` = col_number(), 
+#        ` pm10` = col_number(), 
 #        ` so2` = col_number(), 
         date = col_date(format = "%Y/%m/%d")), 
     trim_ws = FALSE) %>%
@@ -109,18 +135,15 @@ Case <- read_csv("parque-d.pedro ii, são paulo, brazil-air-quality.csv",  # NAM
 
 # IN THE CASE OF THE LOCAL EPIDEMIC STARTED POST 22/01/2020
 
-CaseCCF <- Case %>% filter(date >= as.Date("2020-01-22") - months(3))
+CaseCCF <- Case %>% filter(date >= as.Date("2020-01-22") - months(2))
 CaseCCF$dCase[is.na(CaseCCF$dCase)] <- 0
-CaseCCF <- CaseCCF %>% select(" o3", dCase) %>% na.omit()
-ccf(x = CaseCCF$" o3", y = CaseCCF$dCase, type = "correlation", plot = TRUE, lag.max = 20)
+CaseCCF <- CaseCCF %>% select(" pm25", dCase) %>% na.omit()
+ccf(x = CaseCCF$" pm25", y = CaseCCF$dCase, type = "correlation", plot = TRUE, lag.max = 50)
 ```
 
 
 
 ```{r}
-
-
-
 lo <- loess(Case$" pm25"~Case$Days, span = 0.5)
 plot(x = Case$date, y = Case$` pm25`, xlim = c(as.Date("2019-06-01"), as.Date("2020-03-29")))
 lines(predict(lo), col='red', lwd=2)
