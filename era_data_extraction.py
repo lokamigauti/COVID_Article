@@ -88,53 +88,61 @@ if __name__ == '__main__':
     dataset = read_era(path_to_files, vars_filenames)
     aqi, aqi_metadata = read_aqi()
     jHopkins = read_JHopkins()
-    dist_threshold = 4
+    dist_threshold = 1
     datasets_by_location = []
-    for location in aqi['City'].unique():
+    states = jHopkins.Province_State.values
+    locations = jHopkins.Admin2.values
+    for state in states:
+        for location in locations:
 
-        if location in jHopkins.Admin2.values:
-            print(f'Great, {location} exists in both datasets')
-            lat, lon = aqi_metadata[location]
+            if location in aqi['City'].unique():
+                print(f'Great, {location} exists in both datasets')
+                lat, lon = aqi_metadata[location]
 
-            jH = jHopkins.where(jHopkins.Admin2 == location, drop=True)
-            jH = jH.dropna('Province_State', how='all')
-            if len(jH.Province_State.values) == 1:
-                print(f'Great, there is only one state with a city named {location} that has covid data')
-                d = dataset.sel(latitude=lat, longitude=lon, method='nearest')
-                jHlat = jH.Lat.values[0][0][0]
-                jHlon = jH.Long_.values[0][0][0]
-                dist = ((jHlat - lat)**2 + (jHlon - lon)**2)**0.5
-                if dist < dist_threshold:
-                    jH = jH['cases']
-                    d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
-                    d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
-                    d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
+                jH = jHopkins.sel(Province_State=state).where(jHopkins.Admin2 == location, drop=True)
+                jH = jH.dropna('time', how='all')
+                if jH.time.values.shape[0] > 0:
+                    jHlat = jH.isel(time=0, Admin2=0).Lat.values
+                    jHlon = jH.isel(time=0, Admin2=0).Long_.values
+                    dist = ((jHlat - lat) ** 2 + (jHlon - lon) ** 2) ** 0.5
+                    jH = jH.drop('Province_State')
 
-                    aqi_temp = aqi.loc[aqi['City'] == location][['median', 'Date']].set_index('Date').to_xarray().rename(
-                        {'Date': 'time'})
-                    aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
-                    aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
-                    jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
-                    jH.name = 'covid_cases'
-                    jH = jH.to_dataset()
-                    try:
-                        d = xr.merge([d, aqi_temp])
-                        datasets_by_location.append(d.assign_coords(location_name=location))
-                    except:
-                        print('Could not merge datasets')
-                        pass
+                    d = dataset.sel(latitude=lat, longitude=lon, method='nearest')
+                    if dist.min() < dist_threshold:
+                        jH = jH['cases']
+                        d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
+                        d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
+                        d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
+
+                        aqi_temp = aqi.loc[aqi['City'] == location][['median', 'Date']].set_index('Date').to_xarray().rename(
+                            {'Date': 'time'})
+                        aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
+                        aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
+                        jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
+                        jH.name = 'covid_cases'
+                        jH = jH.to_dataset()
+                        jH = jH.isel(Admin2=0).drop('Admin2')
+
+                        try:
+                            d = xr.merge([d, aqi_temp, jH])
+                            d = d.rename({'median': 'median_mp25'}).isel(latitude=0, longitude=0)
+                            d = d.assign_coords(location_name=location)
+                            datasets_by_location.append(d)
+                        except:
+                            print('Could not merge datasets')
+                            pass
+                    else:
+                        print('Too bad, aqi and jH points are too far off.')
                 else:
-                    print('Too bad, aqi and jH points are too far off.')
-            else:
-                print(f'Shame, more than one state is associated to {location}')
+                    print(f'Too bad, jHopkins data for {location} is empty')
         else:
             print(f'Too bad, {location} is not available in the John Hopkins dataset.')
 
 
-    datasets_by_location = xr.concat(datasets_by_location, 'location_name')
-    datasets_by_location.to_dataframe().to_csv('data/meteorological_variables.csv')
+    datasets_by_location = xr.concat(datasets_by_location, dim='location_name')
+    # datasets_by_location.to_dataframe().to_csv('data/meteorological_variables.csv')
     datasets_by_location.resample(time='1D').mean().to_dataframe().to_csv('data/meteorological_variables_daily_mean.csv')
-
+    datasets_by_location.resample(time='1D').mean().to_netcdf('data/dataset.nc')
     #
     # aqi['median']
     #
