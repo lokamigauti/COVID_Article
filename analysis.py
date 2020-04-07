@@ -33,7 +33,7 @@ def make_patch_spines_invisible(ax):
         sp.set_visible(False)
 
 
-var = 't2m'
+var = 'fdir'
 for loc in ds.location_name.values:
     plt.style.use('seaborn')
 
