@@ -92,10 +92,13 @@ if __name__ == '__main__':
     datasets_by_location = []
     states = jHopkins.Province_State.values
     locations = jHopkins.Admin2.values
+
+
     for state in states:
         for location in locations:
 
             if location in aqi['City'].unique():
+
                 print(f'Great, {location} exists in both datasets')
                 lat, lon = aqi_metadata[location]
 
@@ -136,7 +139,7 @@ if __name__ == '__main__':
                 else:
                     print(f'Too bad, jHopkins data for {location} is empty')
         else:
-            print(f'Too bad, {location} is not available in the John Hopkins dataset.')
+            print(f'Too bad, {location} is not available in the aqi dataset.')
 
 
     datasets_by_location = xr.concat(datasets_by_location, dim='location_name')

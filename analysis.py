@@ -33,6 +33,7 @@ def make_patch_spines_invisible(ax):
         sp.set_visible(False)
 
 
+var = 't2m'
 for loc in ds.location_name.values:
     plt.style.use('seaborn')
 
@@ -46,14 +47,14 @@ for loc in ds.location_name.values:
     ax3.spines["right"].set_visible(True)
 
     ds['covid_trend'].sel(location_name=loc).plot(ax=ax, color='blue', )
-    ds['uvb'].sel(location_name=loc).plot(ax=ax2, color='red', )
+    ds[var].sel(location_name=loc).plot(ax=ax2, color='red', )
     ds['median_mp25'].sel(location_name=loc).plot(ax=ax3, color='black', )
 
     ax.set_ylabel('Trend of the number of cases', color='blue')
-    ax2.set_ylabel('UVB ', color='red')
+    ax2.set_ylabel(f'{var}', color='red')
     ax3.set_ylabel('Median PM2.5 ', color='black')
 
     ax2.grid(False)
     ax3.grid(False)
     # fig.legend(['covid_trend', 'median_mp25'])
-    plt.savefig(f'figs/{loc}.pdf')
+    plt.savefig(f'figs/{loc}_{var}.pdf')
