@@ -1,0 +1,186 @@
+---
+title: "R Notebook"
+output:
+  html_document:
+    df_print: paged
+---
+
+```{r, warning=FALSE}
+library(readr)
+library(tidyverse)
+library(corrplot)
+library(stats)
+library(lubridate)
+ccf2 <- function(df){
+  x <- df[,1] %>% as.vector()
+  y <- df[,2] %>% as.vector()
+  return(ccf(x = x, y = y, type = "correlation", plot = TRUE, lag.max = 50))
+}
+cor2 <- function(df){
+  x <- df[,1] %>% as.vector()
+  y <- df[,2] %>% as.vector()
+  return(cor(x = x, y = y, method = "spearman"))
+}
+lm_eqn <- function(df){
+  colnames(df) <- c("x", "y")
+  m <- lm(y ~ x, df);
+  eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(r)^2~"="~r2, 
+       list(a = format(unname(coef(m)[1]), digits = 2),
+            b = format(unname(coef(m)[2]), digits = 2),
+           r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));
+}
+N_casos <- function(x){
+  y <- c()
+  y[1] <- x[1]
+  for(i in 2:length(x)){
+    y[i] <- ifelse((x[i] - x[i-1]) < 0, 0, (x[i] - x[i-1]))
+  }
+  return(y)
+}
+```
+
+```{r}
+ds <- read_csv("G:/My Drive/IC/Doutorado/Artigos/COVID/US-GeneralDF.csv", 
+    col_types = cols(time = col_datetime(format = "%Y-%m-%d")))
+ds$covid_cases[is.na(ds$covid_cases)] <- 0
+ds$uvb[is.na(ds$uvb)] <- 0 #remover com atualização do ERA5
+ds$fdir[is.na(ds$fdir)] <- 0 #remover com atualização do ERA5
+ds$t2m[is.na(ds$t2m)] <- 0 #remover com atualização do ERA5
+ds <- ds %>%
+  na.omit()
+
+#daily_cases <- N_casos(ds$covid_cases)
+#ds <- cbind(ds, daily_cases)
+
+# lo <- loess(Case$dCase~Case$Days, span = 0.5) SMOOTH THE CASES!
+```
+
+```{r}
+nlag = 14
+p <- ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  group_by(location_name) %>%
+  filter(is_quarentined == 1) %>%
+  summarize(pm = sum(median_mp25), cases = sum(covid_cases_first_derivative)) %>%
+  select(pm, cases) %>%
+  mutate(cases = na_if(cases, 0))
+
+p %>%
+ggplot(aes(x = pm, y = cases))+
+  geom_point()+
+  geom_smooth(method=lm , color="red", fill="#69b3a2", se=TRUE)+
+  geom_text(x = 25, y = 600, label = lm_eqn(p), parse = TRUE)
+```
+
+```{r}
+lags = 0:20
+correlations = data.frame(lags = NA, corr = NA, city = NA)
+rowtoappend = data.frame(lags = NA, corr = NA, city = NA)
+cities <- ds %>%
+  group_by(location_name) %>%
+  summarize(case = sum(covid_cases)) %>%
+  mutate(location_name = ifelse(case == 0, NA, location_name)) %>%
+  na.omit() %>%
+  pull(location_name) %>%
+  as.vector()
+for(city in cities){
+  for(nlag in lags){
+    rowtoappend[nlag,"lags"] <- nlag
+    rowtoappend[nlag,"corr"] <- ds %>%
+      filter(location_name == city) %>%
+      select(median_mp25, covid_cases_first_derivative, time) %>%
+      mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+      filter(time > as.Date("2020-03-20")) %>%
+      select(median_mp25, covid_cases_first_derivative) %>%
+      na.omit() %>%
+      cor2 %>%
+      as.numeric()
+    rowtoappend[nlag,"city"] <- city %>% as.character()
+  }
+  correlations <- bind_rows(correlations, rowtoappend)
+}
+
+correlations %>% 
+  na.omit %>%
+  #filter(corr > 0) %>%
+  transform(lags = as.factor(lags)) %>%
+  add_count(lags) %>%
+  transform(n = as.factor(n)) %>%
+  ggplot(aes(x = lags, y = corr, col = n))+
+  geom_boxplot()
+```
+
+
+```{r}
+nlag = 14
+ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(is_quarentined == FALSE) %>%
+  filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
+  na.omit() %>%
+  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  cor(method = "spearman") %>%
+  corrplot(method = "color", type = "upper", title = "Sem Quarentena")
+ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(is_quarentined == TRUE) %>%
+  filter(covid_cases > 5) %>%
+  na.omit() %>%
+  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  cor(method = "spearman") %>%
+  corrplot(method = "color", type = "lower", title = "Quarentena")
+ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  #filter(is_quarentined == FALSE) %>%
+  filter(covid_cases > 5) %>%
+  na.omit() %>%
+  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  cor(method = "spearman") %>%
+  corrplot(method = "color", type = "lower", title = "Total")
+
+
+M <- ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(is_quarentined == TRUE) %>%
+  filter(covid_cases > 5) %>%
+  na.omit() %>%
+  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  cor(method = "spearman")
+  
+M %>% 
+  as.data.frame() %>%
+  rownames_to_column("var") %>%
+  select(var, covid_cases_first_derivative) %>%
+  filter(var %in% c("uvb", "t2m", "median_mp25")) %>%
+  transform(var = as.factor(var)) %>%
+  ggplot(aes(x = var, y = covid_cases_first_derivative))+
+  geom_col()
+```
+
+```{r}
+nlag = 14
+data_training <- ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
+  na.omit() %>%
+  select(time, uvb, t2m, fdir, median_mp25, covid_cases_first_derivative)
+
+lm(covid_cases_first_derivative ~ median_mp25 + uvb, data = data_training)
+```
+
