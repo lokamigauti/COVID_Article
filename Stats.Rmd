@@ -11,6 +11,8 @@ library(tidyverse)
 library(corrplot)
 library(stats)
 library(lubridate)
+library(modelr)
+library(gam)
 ccf2 <- function(df){
   x <- df[,1] %>% as.vector()
   y <- df[,2] %>% as.vector()
@@ -37,6 +39,9 @@ N_casos <- function(x){
     y[i] <- ifelse((x[i] - x[i-1]) < 0, 0, (x[i] - x[i-1]))
   }
   return(y)
+}
+mkdaycounter <- function(x){
+  
 }
 ```
 
@@ -70,7 +75,7 @@ p %>%
 ggplot(aes(x = pm, y = cases))+
   geom_point()+
   geom_smooth(method=lm , color="red", fill="#69b3a2", se=TRUE)+
-  geom_text(x = 25, y = 600, label = lm_eqn(p), parse = TRUE)
+  geom_text(x = 200, y = 600, label = lm_eqn(p), parse = TRUE)
 ```
 
 ```{r}
@@ -168,19 +173,88 @@ M %>%
   transform(var = as.factor(var)) %>%
   ggplot(aes(x = var, y = covid_cases_first_derivative))+
   geom_col()
-```
 
+ds %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(is_quarentined == TRUE) %>%
+  filter(covid_cases > 5) %>%
+  na.omit() %>%
+  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative, covid_cases_second_derivative) %>%
+  cor(method = "spearman") %>%
+  corrplot(method = "color", type = "lower", title = "Quarentena")
+```
+# Questão de Tempo
 ```{r}
 nlag = 14
-data_training <- ds %>%
+data_training1 <- ds %>%
+  #filter(location_name == "Honolulu") %>%
   mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(time, uvb, t2m, fdir, median_mp25, covid_cases_first_derivative)
+  select(uvb, t2m, median_mp25, covid_cases)
+data_training1 <- data_training1 %>%
+  mutate(day = 1:nrow(data_training1))
+data_training2 <- ds %>%
+  filter(location_name == "Los Angeles") %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
+  na.omit() %>%
+  select(uvb, t2m, median_mp25, covid_cases)
+data_training2 <- data_training2 %>%
+  mutate(day = 1:nrow(data_training2))
+data_training3 <- ds %>%
+  filter(location_name == "Fresno") %>%
+  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(uvb = lag(uvb, n = nlag)) %>%
+  mutate(t2m = lag(t2m, n = nlag)) %>%
+  mutate(fdir = lag(fdir, n = nlag)) %>%
+  filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
+  na.omit() %>%
+  select(uvb, t2m, median_mp25, covid_cases)
+data_training3 <- data_training3 %>%
+  mutate(day = 1:nrow(data_training3))
 
-lm(covid_cases_first_derivative ~ median_mp25 + uvb, data = data_training)
+#mod1 <- lm(covid_cases_first_derivative ~ median_mp25 + uvb, data = data_training)
+# grid <- data_training %>% 
+#   data_grid(covid_cases_first_derivative, median_mp25, uvb) 
+# grid <- grid %>% 
+#   add_predictions(mod1) 
+# ggplot(data_training, aes(covid_cases_first_derivative)) +
+#   geom_point(aes(y = y)) +
+#   geom_line(aes(y = pred), data = grid, colour = "red", size = 1)
+
+#gam1 <- gam(covid_cases ~ s(median_mp25, df = 6) + s(uvb, df = 6), data = data_training)
+#summary(gam1)
+
+#  par(mfrow=c(1,2)) #to partition the Plotting Window
+#  plot(gam1,se = TRUE)
+  
+mod1 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_mp25/max(median_mp25)),
+            family = binomial(link = "logit"), data = data_training1)
+mod2 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_mp25/max(median_mp25)),
+            family = binomial(link = "logit"), data = data_training2)
+mod3 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_mp25/max(median_mp25)),
+            family = binomial(link = "logit"), data = data_training3)
+
+summary(mod1)
+summary(mod2)
+summary(mod3)
+
+pred <- predict(mod1, type="response")
+
+par(mfrow=c(1,2))
+plot(y = pred, x = data_training$day)
+plot(y = data_training$covid_cases/max(data_training$covid_cases), x = data_training$day)
+
+plot(mod1)
 ```
 
