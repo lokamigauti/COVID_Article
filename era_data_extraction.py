@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 import urllib.request, json
 import numpy as np
-
+import locale
 def read_era(path_to_files, vars_filenames):
     """
     Method to read and preprocess the ncdf files
@@ -65,8 +65,7 @@ def read_aqi():
     return aqi, aqi_metadata
 
 def read_JHopkins():
-    url = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data' \
-          '/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv'
+    url = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv'
     data = pd.read_csv(url)
     data = data.drop(['UID', 'iso2', 'iso3', 'FIPS', 'Combined_Key', 'Country_Region', 'code3'], axis=1)
     data = data.melt(id_vars=['Province_State', 'Admin2', 'Lat', 'Long_'], value_name='cases', var_name='time')
@@ -82,8 +81,7 @@ if __name__ == '__main__':
         'direct_solar_radiation': 'direct_solar_radiation_sfc_ERA5_6hr_{year}010100-{year}123118.nc'
     }
 
-
-
+    quarentine = pd.read_csv('data/quarentine_USA.csv', sep=';')
     path_to_files = Path('~/phd/data/ERA5/')
     dataset = read_era(path_to_files, vars_filenames)
     aqi, aqi_metadata = read_aqi()
@@ -95,6 +93,15 @@ if __name__ == '__main__':
 
 
     for state in states:
+        try:
+            quarentine_date = quarentine.loc[quarentine['State'].str.contains(state)]['Effective Stay Home'].values[0]
+            quarentine_date = quarentine_date + '/2020'
+            day, month, year = quarentine_date.split('/')
+            month = month.capitalize()
+            month = 'Apr' if month == 'Abr' else month
+            quarentine_date = pd.to_datetime(day + '/' + month + '/' + year, format='%d/%b/%Y')
+        except:
+            quarentine_date = pd.to_datetime('01/Jan/2090', format='%d/%b/%Y' )
         for location in locations:
 
             if location in aqi['City'].unique():
@@ -116,6 +123,8 @@ if __name__ == '__main__':
                         d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
                         d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
                         d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
+                        d = d.sortby('time')
+                        d = d.resample(time='1D').mean()
 
                         aqi_temp = aqi.loc[aqi['City'] == location][['median', 'Date']].set_index('Date').to_xarray().rename(
                             {'Date': 'time'})
@@ -123,13 +132,24 @@ if __name__ == '__main__':
                         aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
                         jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
                         jH.name = 'covid_cases'
+
+                        jH_diff = jH.differentiate('time', datetime_unit='D').where(jH > 5, 0)
+
+                        jH_diff.name = 'covid_cases_first_derivative'
+                        jH_diff2 = jH_diff.differentiate('time', datetime_unit='D').where(jH > 5, 0)
+                        jH_diff2.name = 'covid_cases_second_derivative'
                         jH = jH.to_dataset()
                         jH = jH.isel(Admin2=0).drop('Admin2')
-
+                        jH_diff = jH_diff.to_dataset()
+                        jH_diff = jH_diff.isel(Admin2=0).drop('Admin2')
+                        jH_diff2 = jH_diff2.to_dataset()
+                        jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
                         try:
-                            d = xr.merge([d, aqi_temp, jH])
+                            d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2])
                             d = d.rename({'median': 'median_mp25'}).isel(latitude=0, longitude=0)
                             d = d.assign_coords(location_name=location)
+                            d['is_quarentined'] = ('time'), [True if x > quarentine_date else False for x in
+                                                             d.time.values]
                             datasets_by_location.append(d)
                         except:
                             print('Could not merge datasets')
@@ -141,11 +161,10 @@ if __name__ == '__main__':
         else:
             print(f'Too bad, {location} is not available in the aqi dataset.')
 
-
     datasets_by_location = xr.concat(datasets_by_location, dim='location_name')
     # datasets_by_location.to_dataframe().to_csv('data/meteorological_variables.csv')
-    datasets_by_location.resample(time='1D').mean().to_dataframe().to_csv('data/meteorological_variables_daily_mean.csv')
-    datasets_by_location.resample(time='1D').mean().to_netcdf('data/dataset.nc')
+    datasets_by_location.to_dataframe().to_csv('data/meteorological_variables_daily_mean.csv')
+    # datasets_by_location.resample(time='1D').mean().to_netcdf('data/dataset.nc')
     #
     # aqi['median']
     #
