@@ -20,6 +20,7 @@ library(tidyverse)
 library(ggisoband)
 library(corrplot)
 library(stats)
+#library(pspearman)
 library(lubridate)
 library(modelr)
 #library(gam)
@@ -36,11 +37,17 @@ cor2 <- function(df){
   y <- df[,2] %>% as.vector()
   return(cor(x = x, y = y, method = "spearman"))
 }
-# cor2test <- function(df){
-#   x <- df[,1] %>% as.vector()
-#   y <- df[,2] %>% as.vector()
-#   return(cor.test(x = x, y = y, method = "spearman", alternative = "greater"))
-# }
+cor2test <- function(df){
+  x <- df[,1] %>% as.vector()
+  y <- df[,2] %>% as.vector()
+  test <- cor.test(x = x, y = y)
+  return(test$p.value)
+}
+shaptest <- function(df){
+  x <- df[,1] %>% as.vector()
+  y <- df[,2] %>% as.vector()
+  return(shapiro.test(x = x, y = y))
+}
 lm_eqn <- function(df){
   colnames(df) <- c("x", "y")
   m <- lm(y ~ x, df);
@@ -61,28 +68,26 @@ N_casos <- function(x){
 ```
 
 ```{r}
-ds <- read_csv("G:/My Drive/IC/Doutorado/Artigos/COVID/US-GeneralDF.csv", 
+ds <- read_csv("meteorological_variables_daily_mean.csv", 
     col_types = cols(time = col_datetime(format = "%Y-%m-%d")))
 ds$covid_cases[is.na(ds$covid_cases)] <- 0
 ds$uvb[is.na(ds$uvb)] <- 0 #remover com atualização do ERA5
 ds$fdir[is.na(ds$fdir)] <- 0 #remover com atualização do ERA5
 ds$t2m[is.na(ds$t2m)] <- 0 #remover com atualização do ERA5
-ds <- ds %>%
-  na.omit()
-
-#daily_cases <- N_casos(ds$covid_cases)
-#ds <- cbind(ds, daily_cases)
-
-# lo <- loess(Case$dCase~Case$Days, span = 0.5) SMOOTH THE CASES!
+#ds <- ds %>%
+#  na.omit()
+# ds <- ds %>%
+#   group_by(location_name) %>%
+#   summary()
 ```
 
 ```{r}
 # nlag = 14
 # p <- ds %>%
-#   mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+#   mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
 #   group_by(location_name) %>%
 #   filter(is_quarentined == 1) %>%
-#   summarize(pm = sum(median_mp25), cases = sum(covid_cases_first_derivative)) %>%
+#   summarize(pm = sum(median_pm25), cases = sum(covid_cases_first_derivative)) %>%
 #   select(pm, cases) %>%
 #   mutate(cases = na_if(cases, 0))
 # 
@@ -102,25 +107,74 @@ rowtoappend <- data.frame(mavgs = NA, lags = NA, corr = NA, city = NA)
 
 cities <- ds %>%
   group_by(location_name) %>%
-  summarize(case = sum(covid_cases)) %>%
-  mutate(location_name = ifelse(case == 0, NA, location_name)) %>%
+  summarize(case = max(covid_cases)) %>%
+  mutate(location_name = ifelse(case < 300, NA, location_name)) %>%
   na.omit() %>%
   pull(location_name) %>%
   as.vector()
+
+#cities <- c("Manhattan", "Denver", "Queens")
+
+# for(city in cities){
+#   for(nlag in lags){
+#       correlations[i,"lags"] <- nlag
+#       correlations[i,"mavgs"] <- 1
+#       correlations[i,"corr"] <- ds %>%
+#         filter(location_name == city) %>%
+#         select(median_pm25, covid_cases_first_derivative, time, covid_cases, is_quarentined) %>%
+#         mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
+#         #filter(time > as.Date("2020-03-20")) %>%
+#         filter(covid_cases > 5) %>%
+#         filter(is_quarentined == 1) %>%
+#         select(median_pm25, covid_cases_first_derivative) %>%
+#         na.omit() %>%
+#         cor2 %>%
+#         as.numeric()
+#       correlations[i,"city"] <- city %>% as.character()
+#       i <- i + 1
+#   }
+# }
+# 
+# for(city in cities){
+#   for(nlag in lags){
+#     for(nmavg in mavgs){
+#       rowtoappend[i,"lags"] <- nlag
+#       rowtoappend[i,"mavgs"] <- nmavg
+#       rowtoappend[i,"corr"] <- ds %>%
+#         filter(location_name == city) %>%
+#         select(median_pm25, covid_cases_first_derivative, time, covid_cases, is_quarentined) %>%
+#         mutate(median_pm25 = lag(movavg(median_pm25, n = nmavg, type = "s"), n = nlag)) %>%
+#         #filter(time > as.Date("2020-03-20")) %>% 
+#         filter(covid_cases > 5) %>%
+#         filter(is_quarentined == 1) %>%
+#         select(median_pm25, covid_cases_first_derivative) %>%
+#         na.omit() %>%
+#         cor2 %>%
+#         as.numeric()
+#       rowtoappend[i,"city"] <- city %>% as.character()
+#       i <- i + 1 
+#     }
+#   }
+# }
 
 for(city in cities){
   for(nlag in lags){
       correlations[i,"lags"] <- nlag
       correlations[i,"mavgs"] <- 1
-      correlations[i,"corr"] <- ds %>%
+      a <- ds %>%
         filter(location_name == city) %>%
-        select(median_mp25, covid_cases_first_derivative, time) %>%
-        mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
-        filter(time > as.Date("2020-03-20")) %>%
-        select(median_mp25, covid_cases_first_derivative) %>%
-        na.omit() %>%
+        select(median_pm25, covid_cases_first_derivative, time, covid_cases, is_quarentined) %>%
+        mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
+        #filter(time > as.Date("2020-03-20")) %>%
+        filter(covid_cases > 5) %>%
+        filter(is_quarentined == 1) %>%
+        select(median_pm25, covid_cases_first_derivative) %>%
+        na.omit()
+      correlations[i,"corr"] <- a %>%
         cor2 %>%
         as.numeric()
+      a <- tryCatch(cor.test(a$median_pm25, a$covid_cases_first_derivative, method = "spearman", exact = FALSE), error = function(e) NA)
+      correlations[i,"corr_p"] <- tryCatch(a$p.value, error = function(e) NA)
       correlations[i,"city"] <- city %>% as.character()
       i <- i + 1
   }
@@ -131,40 +185,46 @@ for(city in cities){
     for(nmavg in mavgs){
       rowtoappend[i,"lags"] <- nlag
       rowtoappend[i,"mavgs"] <- nmavg
-      rowtoappend[i,"corr"] <- ds %>%
+      a <- ds %>%
         filter(location_name == city) %>%
-        select(median_mp25, covid_cases_first_derivative, time) %>%
-        mutate(median_mp25 = lag(movavg(median_mp25, n = nmavg, type = "s"), n = nlag)) %>%
-        filter(time > as.Date("2020-03-20")) %>%
-        select(median_mp25, covid_cases_first_derivative) %>%
-        na.omit() %>%
+        select(median_pm25, covid_cases_first_derivative, time, covid_cases, is_quarentined) %>%
+        mutate(median_pm25 = lag(movavg(median_pm25, n = nmavg, type = "s"), n = nlag)) %>%
+        #filter(time > as.Date("2020-03-20")) %>% 
+        filter(covid_cases > 5) %>%
+        filter(is_quarentined == 1) %>%
+        select(median_pm25, covid_cases_first_derivative) %>%
+        na.omit()
+      rowtoappend[i,"corr"] <- a %>%
         cor2 %>%
         as.numeric()
+      a <- tryCatch(cor.test(a$median_pm25, a$covid_cases_first_derivative, method = "spearman", exact = FALSE), error = function(e) NA)
+      rowtoappend[i,"corr_p"] <- tryCatch(a$p.value, error = function(e) NA)
       rowtoappend[i,"city"] <- city %>% as.character()
-      i <- i + 1
+      i <- i + 1 
     }
   }
 }
 
 correlations <- bind_rows(correlations, rowtoappend)
 
-correlations %>% 
-  na.omit %>%
-  transform(lags = as.factor(lags)) %>%
-  transform(mavgs = as.factor(mavgs)) %>%
-  group_by(mavgs, lags) %>%
-  summarise(sdcorr = as.numeric(sd(corr, na.rm = TRUE)), corr = median(corr)) %>% # fazer a media da corr
-  # add_count(lags, name = "nlags") %>%
-  # add_count(mavgs, name = "nmavgs") %>%
-  #transform(nlags = as.factor(nlags)) %>%
-  #transform(nmavgs = as.factor(nmavgs)) %>%
-  ggplot(aes(x = lags, y = mavgs, z = 1/sdcorr))+
-  geom_raster(aes(fill = corr, alpha = 1/sdcorr))+
-  #geom_contour(aes(z = sdcorr, fill = sdcorr))+
-  #stat_contour(geom = "polygon", aes(fill = sdcorr))
-  scale_fill_distiller(palette = "RdBu")
+# correlations %>% 
+#   na.omit %>%
+#   transform(lags = as.factor(lags)) %>%
+#   transform(mavgs = as.factor(mavgs)) %>%
+#   group_by(mavgs, lags) %>%
+#   summarise(sdcorr = as.numeric(sd(corr, na.rm = TRUE)), corr = mean(corr)) %>%
+#   mutate(sdcorr1 = if_else(sdcorr < 0.1, 1, NA_real_),
+#          sdcorr2 = if_else(sdcorr < 0.2, 1, NA_real_),
+#          sdcorr3 = if_else(sdcorr < 0.3, 1, NA_real_)) %>% # fazer classes de scorr
+#     ggplot(aes(x = lags, y = mavgs, z = 1/sdcorr))+
+#     #geom_raster(aes(fill = corr))+
+#     #geom_tile(alpha = 0, colour = "black")+
+#     geom_tile(aes(colour = as.factor(sdcorr1)),alpha = 0)+
+#     scale_fill_distiller(palette = "RdBu")+
+#     theme_light()+
+#     theme(panel.grid.major = element_blank())
 
-the_corr_plot <- correlations %>% 
+the_corr_plot <- correlations %>%
   na.omit %>%
   transform(lags = as.factor(lags)) %>%
   transform(mavgs = as.factor(mavgs)) %>%
@@ -173,289 +233,459 @@ the_corr_plot <- correlations %>%
 
 write.csv(the_corr_plot, file = "corr_df.csv")
 
-#contornar com correlacoes significativas
+write.csv(correlations, file = "corr_by_county.csv")
+
+library(ggalt)
+
+plot <- correlations %>%
+  filter(corr_p < 0.05) %>%
+  na.omit %>%
+  transform(lags = as.factor(lags)) %>%
+  transform(mavgs = as.factor(mavgs)) %>%
+  transform(city = as.factor(city)) %>%
+  group_by(mavgs, lags) %>%
+  summarise(sdcorr = as.numeric(sd(corr, na.rm = TRUE)), corr = mean(corr), n = n()) %>%
+  filter(corr > 0)
+#   mutate(sdcorrfactor = case_when(
+#     sdcorr < 0.1 ~ 1,
+#     sdcorr < 0.2 ~ 2,
+#     sdcorr < 0.3 ~ 3,
+#     sdcorr < 0.4 ~ 4,
+#     sdcorr < 0.5 ~ 5))  # fazer classes de scorr
+# subsetplot <- plot %>%
+#   subset(sdcorrfactor == 2)
+plot %>%
+  ggplot(aes(x = lags, y = mavgs, z = corr))+
+  geom_raster(aes(fill = corr))+
+  geom_text(aes(label = n))+
+  geom_tile(alpha = 0, colour = "black")+
+  #geom_tile(aes(colour = as.factor(sdcorrfactor)),alpha = 0)+
+  #geom_encircle(data = subsetplot, s_shape = 1)+
+  scale_fill_distiller(palette = "RdBu")+
+  theme_light()+
+  theme(panel.grid.major = element_blank())
 ```
 
 
 ```{r}
-nlag = 11
+nlag = 12
 ds %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(is_quarentined == FALSE) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  select(uvb, t2m, fdir, median_pm25, covid_cases, covid_cases_first_derivative) %>%
   cor(method = "spearman") %>%
   corrplot(method = "color", type = "upper", title = "Sem Quarentena")
 ds %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(is_quarentined == TRUE) %>%
   filter(covid_cases > 5) %>%
   na.omit() %>%
-  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  select(uvb, t2m, fdir, median_pm25, covid_cases, covid_cases_first_derivative) %>%
   cor(method = "spearman") %>%
   corrplot(method = "color", type = "lower", title = "Quarentena")
 ds %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   #filter(is_quarentined == FALSE) %>%
   filter(covid_cases > 5) %>%
   na.omit() %>%
-  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  select(uvb, t2m, fdir, median_pm25, covid_cases, covid_cases_first_derivative) %>%
   cor(method = "spearman") %>%
   corrplot(method = "color", type = "lower", title = "Total")
 
 
 M <- ds %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(is_quarentined == TRUE) %>%
   filter(covid_cases > 5) %>%
   na.omit() %>%
-  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative) %>%
+  select(uvb, t2m, fdir, median_pm25, covid_cases, covid_cases_first_derivative) %>%
   cor(method = "spearman")
   
 M %>% 
   as.data.frame() %>%
   rownames_to_column("var") %>%
   select(var, covid_cases_first_derivative) %>%
-  filter(var %in% c("uvb", "t2m", "median_mp25")) %>%
+  filter(var %in% c("uvb", "t2m", "median_pm25")) %>%
   transform(var = as.factor(var)) %>%
   ggplot(aes(x = var, y = covid_cases_first_derivative))+
   geom_col()
 
 ds %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(is_quarentined == TRUE) %>%
   filter(covid_cases > 5) %>%
   na.omit() %>%
-  select(uvb, t2m, fdir, median_mp25, covid_cases, covid_cases_first_derivative, covid_cases_second_derivative) %>%
+  select(uvb, t2m, fdir, median_pm25, covid_cases, covid_cases_first_derivative, covid_cases_second_derivative) %>%
   cor(method = "spearman") %>%
   corrplot(method = "color", type = "lower", title = "Quarentena")
 ```
 # Questão de Tempo
+
 ```{r}
-nlag = 11
+i = 1
+models <- data.frame(city = NA, k = NA, k_sd = NA, k_t = NA, k_p = NA, v = NA, v_sd = NA, v_t = NA, v_p = NA, pm_25 = NA, pm_10 = NA, uv = NA, t = NA, density = NA, population = NA)
+
+for(city in cities){
+  
+  models[i, "city"] <- city
+  
+  data_training <- ds %>%
+    select(covid_cases, population, location_name) %>%
+    filter(location_name == city) %>%
+    filter(covid_cases > 5) %>%
+    na.omit() %>%
+    select(covid_cases, population) %>%
+    mutate(day = 1:nrow(.))
+  
+  tryCatch(currentmodel <- nls(covid_cases ~ (population*k/(1+exp(5 + v*day))), data = data_training, start = list(k = 0.01, v = -1), control = list(maxiter = 1000)) %>% summary(), error = function(e) NA)
+  
+  if(is.na(a) == TRUE) {
+    models[i,"k"] <- NA
+    models[i,"k_sd"] <- NA
+    models[i,"k_t"] <- NA
+    models[i,"k_p"] <- NA
+    models[i,"v"] <- NA
+    models[i,"v_sd"] <- NA
+    models[i,"v_t"] <- NA
+    models[i,"v_p"] <- NA
+  }
+  else{
+    models[i,"k"] <- currentmodel$coefficients[1,1]
+    models[i,"k_sd"] <- currentmodel$coefficients[1,2]
+    models[i,"k_t"] <- currentmodel$coefficients[1,3]
+    models[i,"k_p"] <- currentmodel$coefficients[1,4]
+    models[i,"v"] <- currentmodel$coefficients[2,1]
+    models[i,"v_sd"] <- currentmodel$coefficients[2,2]
+    models[i,"v_t"] <- currentmodel$coefficients[2,3]
+    models[i,"v_p"] <- currentmodel$coefficients[2,4]
+  }
+  
+  i <- i + 1
+}
+
+models_rsqr <- data.frame(city = NA, k = NA, k_sd = NA, k_t = NA, k_p = NA, v = NA, v_sd = NA, v_t = NA, v_p = NA, pm_25 = NA, pm_10 = NA, uv = NA, t = NA, density = NA, population = NA, lag = NA, mvavg = NA)
+lags = 0:20
+mavgs = 2:8
+i = 1
+j = 1
+for(city in cities){
+  for(nlag in lags){
+    data_training <- ds %>%
+      filter(location_name == city) %>%
+      mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
+      mutate(median_pm10 = lag(median_pm10, n = nlag)) %>%
+      mutate(uvb = lag(uvb, n = nlag)) %>%
+      mutate(t2m = lag(t2m, n = nlag)) %>%
+      filter(covid_cases > 5) %>%
+      select(uvb, t2m, median_pm25, median_pm10, population, density) %>%
+      summarise(uvb = mean(uvb), 
+                t2m = mean(t2m), 
+                median_pm25 = mean(median_pm25), 
+                median_pm10 = mean(median_pm10), 
+                population = mean(population), 
+                density = mean(density))
+    
+    models_rsqr[j, "k"] <- models[i, "k"]
+    models_rsqr[j, "k_sd"] <- models[i, "k_sd"]
+    models_rsqr[j, "k_t"] <- models[i, "k_t"]
+    models_rsqr[j, "k_p"] <- models[i, "k_p"]
+    models_rsqr[j, "v"] <- models[i, "v"]
+    models_rsqr[j, "v_sd"] <- models[i, "v_sd"]
+    models_rsqr[j, "v_t"] <- models[i, "v_t"]
+    models_rsqr[j, "v_p"] <- models[i, "v_p"]
+    
+    models_rsqr[j, "pm_25"] <- data_training["median_pm25"]
+    models_rsqr[j, "pm_10"] <- data_training["median_pm10"]
+    models_rsqr[j, "uv"] <- data_training["uvb"]
+    models_rsqr[j, "t"] <- data_training["t2m"]
+    models_rsqr[j, "density"] <- data_training["density"]
+    models_rsqr[j, "population"] <- data_training["population"]
+    
+    models_rsqr[j, "lag"] <- nlag
+    models_rsqr[j, "mvavg"] <- 1
+    models_rsqr[j, "city"] <- city
+    
+    j <- j + 1
+  }
+  i <- i + 1
+}
+i = 1
+for(city in cities){
+  for(nlag in lags){
+    for(nmavg in mavgs){
+      data_training <- ds %>%
+        filter(location_name == city) %>%
+        mutate(median_pm25 = lag(movavg(median_pm25, n = nmavg, type = "s"), n = nlag)) %>%
+        mutate(median_pm10 = lag(movavg(median_pm10, n = nmavg, type = "s"), n = nlag)) %>%
+        mutate(uvb = lag(movavg(uvb, n = nmavg, type = "s"), n = nlag)) %>%
+        mutate(t2m = lag(movavg(t2m, n = nmavg, type = "s"), n = nlag)) %>%
+        filter(covid_cases > 5) %>%
+        select(uvb, t2m, median_pm25, median_pm10, population, density) %>%
+        summarise(uvb = mean(uvb), 
+                  t2m = mean(t2m), 
+                  median_pm25 = mean(median_pm25), 
+                  median_pm10 = mean(median_pm10), 
+                  population = mean(population), 
+                  density = mean(density))
+      
+      models_rsqr[j, "k"] <- models[i, "k"]
+      models_rsqr[j, "k_sd"] <- models[i, "k_sd"]
+      models_rsqr[j, "k_t"] <- models[i, "k_t"]
+      models_rsqr[j, "k_p"] <- models[i, "k_p"]
+      models_rsqr[j, "v"] <- models[i, "v"]
+      models_rsqr[j, "v_sd"] <- models[i, "v_sd"]
+      models_rsqr[j, "v_t"] <- models[i, "v_t"]
+      models_rsqr[j, "v_p"] <- models[i, "v_p"]
+      
+      models_rsqr[j, "pm_25"] <- data_training["median_pm25"]
+      models_rsqr[j, "pm_10"] <- data_training["median_pm10"]
+      models_rsqr[j, "uv"] <- data_training["uvb"]
+      models_rsqr[j, "t"] <- data_training["t2m"]
+      models_rsqr[j, "density"] <- data_training["density"]
+      models_rsqr[j, "population"] <- data_training["population"]
+      
+      models_rsqr[j, "lag"] <- nlag
+      models_rsqr[j, "mvavg"] <- nmavg
+      models_rsqr[j, "city"] <- city
+      
+      j <- j + 1
+    }
+  }
+  i <- i + 1
+}
+
+#summary(lm(y ~ x, df))$r.squared
+# Falta fazer as médias acima ignorarem os na e calcular os r^2 pra cada par lag mvavg
+
+```
+
+
+```{r}
+nlag = 12
 
 lapop = 4000000
 data_training1 <- ds %>%
   filter(location_name == "Los Angeles") %>%
-  mutate(median_mp25 = lag(movavg(median_mp25, n = 5, type = "s"), n = nlag)) %>%
+  mutate(median_pm25 = lag(movavg(median_pm25, n = 5, type = "s"), n = nlag)) %>%
   mutate(uvb = lag(movavg(uvb, n = 5, type = "s"), n = nlag)) %>%
   mutate(t2m = lag(movavg(t2m, n = 5, type = "s"), n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   mutate(covid_cases_norm = covid_cases/max(covid_cases)) %>%
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases, covid_cases_norm, covid_cases_first_derivative)
-data_training1 <- data_training1 %>%
-  mutate(day = 1:nrow(data_training1))
+  select(uvb, t2m, median_pm25, covid_cases, covid_cases_norm, covid_cases_first_derivative) %>%
+  mutate(day = 1:nrow(.))
 
 Denverpop = 619000
 data_training2 <- ds %>%
   filter(location_name == "Denver") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training2 <- data_training2 %>%
   mutate(day = 1:nrow(data_training2))
 
 FresnoPop = 530000
 data_training3 <- ds %>%
   filter(location_name == "Fresno") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training3 <- data_training3 %>%
   mutate(day = 1:nrow(data_training3))
 
 popSacra = 490000
 data_training4 <- ds %>%
   filter(location_name == "Sacramento") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training4 <- data_training4 %>%
   mutate(day = 1:nrow(data_training4))
 
 popSanDie = 1395000
 data_training5 <- ds %>%
   filter(location_name == "Hartford") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training5 <- data_training5 %>%
   mutate(day = 1:nrow(data_training5))
 
 popSanFan = 865000
 data_training6 <- ds %>%
   filter(location_name == "San Francisco") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training6 <- data_training6 %>%
   mutate(day = 1:nrow(data_training6))
 
 popHonolulu = 347397
 data_training7 <- ds %>%
   filter(location_name == "Honolulu") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training7 <- data_training7 %>%
   mutate(day = 1:nrow(data_training7))
 
 popPhilly = 1584000
 data_training8 <- ds %>%
   filter(location_name == "Philadelphia") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training8 <- data_training8 %>%
   mutate(day = 1:nrow(data_training8))
 
 popDallas = 1345000
 data_training9 <- ds %>%
   filter(location_name == "Dallas") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training9 <- data_training9 %>%
   mutate(day = 1:nrow(data_training9))
 
 popMil = 592025
 data_training10 <- ds %>%
   filter(location_name == "Milwaukee") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training10 <- data_training10 %>%
   mutate(day = 1:nrow(data_training10))
 
 popBal = 619493
 data_training11 <- ds %>%
   filter(location_name == "Baltimore") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training11 <- data_training11 %>%
   mutate(day = 1:nrow(data_training11))
 
 popProv = 682669
 data_training12 <- ds %>%
   filter(location_name == "El Paso") %>%
-  mutate(median_mp25 = lag(median_mp25, n = nlag)) %>%
+  mutate(median_pm25 = lag(median_pm25, n = nlag)) %>%
   mutate(uvb = lag(uvb, n = nlag)) %>%
   mutate(t2m = lag(t2m, n = nlag)) %>%
   mutate(fdir = lag(fdir, n = nlag)) %>%
   filter(covid_cases > 5) %>% # 5 BECAUSE NUMERIC SHINENIGANS
   na.omit() %>%
-  select(uvb, t2m, median_mp25, covid_cases)
+  select(uvb, t2m, median_pm25, covid_cases)
 data_training12 <- data_training12 %>%
   mutate(day = 1:nrow(data_training12))
 
-#mod1 <- lm(covid_cases_first_derivative ~ median_mp25 + uvb, data = data_training)
+#mod1 <- lm(covid_cases_first_derivative ~ median_pm25 + uvb, data = data_training)
 # grid <- data_training %>% 
-#   data_grid(covid_cases_first_derivative, median_mp25, uvb) 
+#   data_grid(covid_cases_first_derivative, median_pm25, uvb) 
 # grid <- grid %>% 
 #   add_predictions(mod1) 
 # ggplot(data_training, aes(covid_cases_first_derivative)) +
 #   geom_point(aes(y = y)) +
 #   geom_line(aes(y = pred), data = grid, colour = "red", size = 1)
 
-#gam1 <- gam(covid_cases ~ s(median_mp25, df = 6) + s(uvb, df = 6), data = data_training)
+#gam1 <- gam(covid_cases ~ s(median_pm25, df = 6) + s(uvb, df = 6), data = data_training)
 #summary(gam1)
 
 #  par(mfrow=c(1,2)) #to partition the Plotting Window
 #  plot(gam1,se = TRUE)
   
-# mod1 <- gam(covid_cases/max(covid_cases) ~ I(day/max(day)) + s((median_mp25/max(median_mp25)), bs = "tp", k = 4, id = 1) + s((t2m/max(t2m)), bs = "tp", k = 4, id = 2) + s((uvb/max(uvb)), bs = "tp", k = 4, id = 3),
+# mod1 <- gam(covid_cases/max(covid_cases) ~ I(day/max(day)) + s((median_pm25/max(median_pm25)), bs = "tp", k = 4, id = 1) + s((t2m/max(t2m)), bs = "tp", k = 4, id = 2) + s((uvb/max(uvb)), bs = "tp", k = 4, id = 3),
 #             family = binomial(link = "logit"), 
 #             data = data_training1)
 
-mod1 <- gam(covid_cases_norm ~ day + s((median_mp25), bs = "tp", k = 4, id = 1),
-            family = binomial(link = "logit"), 
-            data = data_training1)
+# mod1 <- gam(covid_cases_norm ~ day + s((median_pm25), bs = "tp", k = 4, id = 1),
+#             family = binomial(link = "logit"), 
+#             data = data_training1)
+# 
+# mod1
 
-mod1
+# lapop = 4000000
+mean(data_training1$median_pm25)
+mean(data_training2$median_pm25)
+mean(data_training3$median_pm25)
+mean(data_training4$median_pm25)
+mean(data_training5$median_pm25)
+mean(data_training6$median_pm25)
+mean(data_training7$median_pm25)
+mean(data_training8$median_pm25)
+mean(data_training9$median_pm25)
+mean(data_training10$median_pm25)
+mean(data_training11$median_pm25)
+mean(data_training12$median_pm25)
 
-lapop = 4000000
-
-mean(data_training2$median_mp25)
-mean(data_training3$median_mp25)
-mean(data_training4$median_mp25)
-mean(data_training5$median_mp25)
-mean(data_training6$median_mp25)
-mean(data_training7$median_mp25)
-mean(data_training8$median_mp25)
-mean(data_training9$median_mp25)
-mean(data_training10$median_mp25)
-mean(data_training11$median_mp25)
-mean(data_training12$median_mp25)
-
-sd(data_training2$median_mp25)
-sd(data_training3$median_mp25)
-sd(data_training4$median_mp25)
-sd(data_training5$median_mp25)
-sd(data_training6$median_mp25)
-sd(data_training7$median_mp25)
-sd(data_training8$median_mp25)
-sd(data_training9$median_mp25)
-sd(data_training10$median_mp25)
-sd(data_training11$median_mp25)
-sd(data_training12$median_mp25)
+sd(data_training1$median_pm25)
+sd(data_training2$median_pm25)
+sd(data_training3$median_pm25)
+sd(data_training4$median_pm25)
+sd(data_training5$median_pm25)
+sd(data_training6$median_pm25)
+sd(data_training7$median_pm25)
+sd(data_training8$median_pm25)
+sd(data_training9$median_pm25)
+sd(data_training10$median_pm25)
+sd(data_training11$median_pm25)
+sd(data_training12$median_pm25)
 
 
 
@@ -463,44 +693,44 @@ sd(data_training12$median_mp25)
 # summary(nlsLA)
 
 nlsLA <- nls(covid_cases ~ (4000000*k/(1+exp(5 + v*day))), data = data_training1, start = list(k = 0.0017, v = -1), trace = TRUE, control = list(maxiter = 1000))
-summary(nlsLA)
+s1 <- summary(nlsLA)
 
 nlsDenver <- nls(covid_cases ~ ((619000*k)/(1+exp(5 + v*day))), data = data_training2, start = list(k = 0.001, v = -1), trace = TRUE)
-summary(nlsDenver)
+s2 <- summary(nlsDenver)
 
 nlsFresno <- nls(covid_cases ~ (530000*k/(1+exp(5 + v*day))), data = data_training3, start = list(k = 0.001, v = 1), trace = TRUE)
-summary(nlsFresno)
+s3 <- summary(nlsFresno)
 
 nlsSacra <- nls(covid_cases ~ (490000*k/(1+exp(5 + v*day))), data = data_training4, start = list(k = 0.01, v = 1), trace = TRUE)
-summary(nlsSacra)
+s4 <- summary(nlsSacra)
 
 nlsHartford <- nls(covid_cases ~ (123000*k/(1+exp(5 + v*day))), data = data_training5, start = list(k = 0.01, v = 1), trace = TRUE)
-summary(nlsHartford)
+s5 <- summary(nlsHartford)
 
 nlsSFra <- nls(covid_cases ~ (865000*k/(1+exp(5 + v*day))), data = data_training6, start = list(k = 0.001, v = 1), trace = TRUE)
-summary(nlsSFra)
+s6 <- summary(nlsSFra)
 
 nlsHon <- nls(covid_cases ~ (347397*k/(1+exp(5 + v*day))), data = data_training7, start = list(k = 0.01, v = 1), trace = TRUE)
-summary(nlsHon)
+s7 <- summary(nlsHon)
 
 nlsPhy <- nls(covid_cases ~ (1584000*k/(1+exp(5 + v*day))), data = data_training8, start = list(k = 0.01, v = 1), trace = TRUE)
-summary(nlsPhy)
+s8 <- summary(nlsPhy)
 
 nlsDal <- nls(covid_cases ~ (1345000*k/(1+exp(5 + v*day))), data = data_training9, start = list(k = 0.001, v = 1), trace = TRUE)
-summary(nlsDal)
+s9 <- summary(nlsDal)
 
 nlsMil <- nls(covid_cases ~ (592025*k/(1+exp(5 + v*day))), data = data_training10, start = list(k = 0.01, v = 1), trace = TRUE)
-summary(nlsMil)
+s10 <- summary(nlsMil)
 
 nlsBal <- nls(covid_cases ~ (619493*k/(1+exp(5 + v*day))), data = data_training11, start = list(k = 0.01, v = 1), trace = TRUE)
-summary(nlsBal)
+s11 <- summary(nlsBal)
 
 nlsEPas <- nls(covid_cases ~ (682669*k/(1+exp(5 + v*day))), data = data_training12, start = list(k = 0.01, v = 1), trace = TRUE, control = list(maxiter = 1000))
-summary(nlsEPas)
+s12 <- summary(nlsEPas)
 
-7# mod2 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_mp25/max(median_mp25)),
+7# mod2 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_pm25/max(median_pm25)),
 #             family = binomial(link = "logit"), data = data_training2)
-# mod3 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_mp25/max(median_mp25)),
+# mod3 <- glm(formula = covid_cases/max(covid_cases) ~ I(day/max(day)) + I(median_pm25/max(median_pm25)),
 #             family = binomial(link = "logit"), data = data_training3)
 
 #summary(mod1)
@@ -517,11 +747,11 @@ summary(nlsEPas)
 
 # a <- predict(mod1, newdata = data_training1 ,se=TRUE,type="terms")
 # par(mfrow=c(1,2))
-# plot(y = a$fit[,2], x = data_training1$median_mp25)
+# plot(y = a$fit[,2], x = data_training1$median_pm25)
 
-par(mfrow=c(3,3))
-# plot(data_training1$day, data_training1$covid_cases, xlim = c(0, 30))
-# lines(data_training1$day, predict(nlsLA, newdata = data_training1))
+par(mfrow=c(3,4))
+plot(data_training1$day, data_training1$covid_cases, xlim = c(0, 30))
+lines(data_training1$day, predict(nlsLA, newdata = data_training1)) # not adj - LA
 plot(data_training2$day, data_training2$covid_cases, xlim = c(0, 30))
 lines(data_training2$day, predict(nlsDenver, newdata = data_training2))
 plot(data_training3$day, data_training3$covid_cases, xlim = c(0, 30))
@@ -532,30 +762,66 @@ plot(data_training5$day, data_training5$covid_cases, xlim = c(0, 30))
 lines(data_training5$day, predict(nlsHartford, newdata = data_training5))
 plot(data_training6$day, data_training6$covid_cases, xlim = c(0, 30))
 lines(data_training6$day, predict(nlsSFra, newdata = data_training6))
-plot(data_training7$day, data_training7$covid_cases, xlim = c(0, 30))
+plot(data_training7$day, data_training7$covid_cases, xlim = c(0, 30)) # not adj - hon
 lines(data_training7$day, predict(nlsHon, newdata = data_training7))
 plot(data_training8$day, data_training8$covid_cases, xlim = c(0, 30))
 lines(data_training8$day, predict(nlsPhy, newdata = data_training8))
 plot(data_training9$day, data_training9$covid_cases, xlim = c(0, 30))
 lines(data_training9$day, predict(nlsDal, newdata = data_training9))
+plot(data_training10$day, data_training10$covid_cases, xlim = c(0, 30)) # not adj - mil
+lines(data_training10$day, predict(nlsMil, newdata = data_training10))
+plot(data_training11$day, data_training11$covid_cases, xlim = c(0, 30))
+lines(data_training11$day, predict(nlsBal, newdata = data_training11))
 plot(data_training12$day, data_training12$covid_cases, xlim = c(0, 30))
-lines(data_training12$day, predict(nlsMil, newdata = data_training12))
+lines(data_training12$day, predict(nlsEPas, newdata = data_training12))
+
+
+
+
+
+nlag <- 1
 
 ```
 
 ```{r}
 Model_plot_df <- read_csv("Model_plot_df.csv")
 
+siringe <- function(df, x, y){
+  
+}
+
+for(i in 1:12){
+  Model_plot_df[]
+}
+
+#not adjusted filter
+Model_plot_df <- Model_plot_df %>%
+  filter(!County %in% c("Los Angeles", "Honolulu", "Milwaukee"))
+
 p <- Model_plot_df %>%
-  select(minus_v, PM)
+  select(PM, minus_v)
 
 Model_plot_df %>%
-  ggplot(aes(minus_v, PM))+
+  ggplot(aes(y = minus_v, x = PM, label = County))+
   geom_point()+
-  geom_errorbarh(aes(xmin = minus_v - v_sdev, xmax = minus_v + v_sdev))+
-  geom_errorbar(aes(ymin = PM - PM_sdev, ymax = PM + PM_sdev))+
+  geom_errorbar(aes(ymin = minus_v - v_sdev, ymax = minus_v + v_sdev))+
+  geom_errorbarh(aes(xmin = PM - PM_sdev, xmax = PM + PM_sdev))+
   geom_smooth(method = "lm", se = FALSE)+
-  geom_text(x = 0.15, y = 45, label = lm_eqn(p), parse = TRUE)+
-  ylab("Average Daily Particulate Matter") + xlab("COVID 19 Cases' Growth Rate")
+  geom_text(y = 0.15, x = 40, label = lm_eqn(p), parse = TRUE)+
+  xlab("Average Daily Particulate Matter") + ylab("COVID 19 Cases' Growth Rate")+
+  geom_text(aes(label=County),hjust=-0.06, vjust=-0.5)
+
+p <- Model_plot_df %>%
+  select(t2m, minus_v)
+
+Model_plot_df %>%
+  ggplot(aes(y = minus_v, x = t2m, label = County))+
+  geom_point()+
+  geom_errorbar(aes(ymin = minus_v - v_sdev, ymax = minus_v + v_sdev))+
+  geom_errorbarh(aes(xmin = t2m - t2m_sdev, xmax = t2m + t2m_sdev))+
+  geom_smooth(method = "lm", se = FALSE)+
+  geom_text(y = 0.11, x = 275, label = lm_eqn(p), parse = TRUE)+
+  xlab("Average Daily Temperature") + ylab("COVID 19 Cases' Growth Rate")+
+  geom_text(aes(label=County),hjust=-0.06, vjust=-0.5)
 ```
 
