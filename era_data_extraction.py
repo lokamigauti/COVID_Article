@@ -130,6 +130,12 @@ if __name__ == '__main__':
                         aqi_temp = aqi.loc[aqi['City'] == location][['Specie','median', 'Date']].set_index('Date').to_xarray().rename(
                             {'Date': 'time'})
                         aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
+                        aqi_temp = aqi_temp.sortby('time')
+                        aqi_temp = xr.merge([
+                                aqi_temp.where(aqi_temp.Specie == 'pm10', drop=True)['median'].rename('median_pm10'),
+                                aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['median'].rename('median_pm25'),
+                        ])
+
                         aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
                         jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
                         jH.name = 'covid_cases'
