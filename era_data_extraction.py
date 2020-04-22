@@ -48,9 +48,10 @@ def find_nearest(array, value):
 def read_aqi():
     path_to_aqi = 'data/waqi-covid19-airqualitydata.csv'
     aqi = pd.read_csv(path_to_aqi)
-    aqi = aqi.loc[aqi['Specie'] == 'pm25']
     aqi = aqi.loc[aqi['Country'] == 'US']
-
+    aqi25 = aqi.loc[aqi['Specie'] == 'pm25']
+    aqi10 = aqi.loc[aqi['Specie'] == 'pm10']
+    aqi = pd.concat([aqi25, aqi10], axis=0)
     with urllib.request.urlopen("https://aqicn.org/data-platform/covid19/airquality-covid19-cities.json") as url:
         data = json.loads(url.read().decode())
 
@@ -126,7 +127,7 @@ if __name__ == '__main__':
                         d = d.sortby('time')
                         d = d.resample(time='1D').mean()
 
-                        aqi_temp = aqi.loc[aqi['City'] == location][['median', 'Date']].set_index('Date').to_xarray().rename(
+                        aqi_temp = aqi.loc[aqi['City'] == location][['Specie','median', 'Date']].set_index('Date').to_xarray().rename(
                             {'Date': 'time'})
                         aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
                         aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
@@ -146,7 +147,7 @@ if __name__ == '__main__':
                         jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
                         try:
                             d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2])
-                            d = d.rename({'median': 'median_mp25'}).isel(latitude=0, longitude=0)
+                            d = d.isel(latitude=0, longitude=0)
                             d = d.assign_coords(location_name=location)
                             d['is_quarentined'] = ('time'), [True if x > quarentine_date else False for x in
                                                              d.time.values]

@@ -12,19 +12,22 @@ ds = ds.rename({'meancorr': 'Mean correlation'})
 ds = ds.rename({'mediancorr': 'Median correlation'})
 fig, ax = plt.subplots()
 
-ds['Mean correlation'].plot( edgecolor='k',ax=ax, cbar_kwargs=dict(orientation='horizontal'), cmap='seismic')
+ratio = ds['Median correlation']/ ds['sdcorr']
+
+ratio.plot( edgecolor='k',vmin=0,ax=ax, cbar_kwargs=dict(orientation='horizontal'), cmap='YlGnBu')
 # ds['sdcorr'].plot( ax=ax,edgecolor='k', add_colorbar=False)
 ax.set_aspect('equal')
 ds.sel(lags=10, mavgs=2)
-p = ds['sdcorr'].plot.contour(levels=4,hatch=['+','/'],ax=ax,colors='k', inline=1, linetype='--',alpha=0.5,
-                              )
-ax.clabel(p, inline=1)
+# p = ds['sdcorr'].plot.contour(levels=8,hatch=['+','/'],ax=ax,colors='k', inline=1, linetype='--',alpha=0.7,
+#                               )
+# ax.clabel(p, inline=1)
 ax.set_xticks(ds.lags.values)
 ax.set_yticks(ds.mavgs.values)
 
 ax.set_xticklabels(ds.lags.values)
 ax.set_xlabel('Lags (days)')
 ax.set_ylabel('Backward moving windows (days)')
+plt.title('Positive only correlation scaled by standard deviation')
 plt.tight_layout()
 plt.show()
 # ds = ds.set_index(['location_name', 'time'])
