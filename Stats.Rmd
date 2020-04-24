@@ -377,8 +377,8 @@ for(city in cities){
     models[i,"v_t"] <- currentmodel$coefficients[2,3]
     models[i,"v_p"] <- currentmodel$coefficients[2,4]
     m <- nls(covid_cases ~ (population*k/(1+exp(5 + v*day))), data = data_training, start = list(k = 0.01, v = -1), control = list(maxiter = 1000))
-    plot(data_training1$day, data_training$covid_cases, xlim = c(0, 30))
-    lines(data_training1$day, predict(m, newdata = data_training))
+    plot(data_training$day, data_training$covid_cases, xlim = c(0, 30), main = city)
+    lines(data_training$day, predict(m, newdata = data_training))
   }
   
   i <- i + 1
