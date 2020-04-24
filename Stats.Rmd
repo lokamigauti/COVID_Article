@@ -27,6 +27,7 @@ library(modelr)
 library(mgcv)
 library(pracma)
 library(RColorBrewer)
+library(magrittr)
 ccf2 <- function(df){
   x <- df[,1] %>% as.vector()
   y <- df[,2] %>% as.vector()
@@ -340,7 +341,7 @@ ds %>%
 
 ```{r}
 i = 1
-models <- data.frame(city = NA, k = NA, k_sd = NA, k_t = NA, k_p = NA, v = NA, v_sd = NA, v_t = NA, v_p = NA, pm_25 = NA, pm_10 = NA, uv = NA, t = NA, density = NA, population = NA)
+models <- data.frame(city = NA, k = NA, k_sd = NA, k_t = NA, k_p = NA, v = NA, v_sd = NA, v_t = NA, v_p = NA)
 
 for(city in cities){
   
@@ -356,7 +357,7 @@ for(city in cities){
   
   tryCatch(currentmodel <- nls(covid_cases ~ (population*k/(1+exp(5 + v*day))), data = data_training, start = list(k = 0.01, v = -1), control = list(maxiter = 1000)) %>% summary(), error = function(e) NA)
   
-  if(is.na(a) == TRUE) {
+  if(is.na(currentmodel) == TRUE) {
     models[i,"k"] <- NA
     models[i,"k_sd"] <- NA
     models[i,"k_t"] <- NA
@@ -375,6 +376,9 @@ for(city in cities){
     models[i,"v_sd"] <- currentmodel$coefficients[2,2]
     models[i,"v_t"] <- currentmodel$coefficients[2,3]
     models[i,"v_p"] <- currentmodel$coefficients[2,4]
+    m <- nls(covid_cases ~ (population*k/(1+exp(5 + v*day))), data = data_training, start = list(k = 0.01, v = -1), control = list(maxiter = 1000))
+    plot(data_training1$day, data_training$covid_cases, xlim = c(0, 30))
+    lines(data_training1$day, predict(m, newdata = data_training))
   }
   
   i <- i + 1
@@ -395,12 +399,12 @@ for(city in cities){
       mutate(t2m = lag(t2m, n = nlag)) %>%
       filter(covid_cases > 5) %>%
       select(uvb, t2m, median_pm25, median_pm10, population, density) %>%
-      summarise(uvb = mean(uvb), 
-                t2m = mean(t2m), 
-                median_pm25 = mean(median_pm25), 
-                median_pm10 = mean(median_pm10), 
-                population = mean(population), 
-                density = mean(density))
+      summarise(uvb = mean(uvb, na.rm = TRUE), 
+                t2m = mean(t2m, na.rm = TRUE), 
+                median_pm25 = mean(median_pm25, na.rm = TRUE), 
+                median_pm10 = mean(median_pm10, na.rm = TRUE), 
+                population = mean(population, na.rm = TRUE), 
+                density = mean(density, na.rm = TRUE))
     
     models_rsqr[j, "k"] <- models[i, "k"]
     models_rsqr[j, "k_sd"] <- models[i, "k_sd"]
@@ -438,12 +442,12 @@ for(city in cities){
         mutate(t2m = lag(movavg(t2m, n = nmavg, type = "s"), n = nlag)) %>%
         filter(covid_cases > 5) %>%
         select(uvb, t2m, median_pm25, median_pm10, population, density) %>%
-        summarise(uvb = mean(uvb), 
-                  t2m = mean(t2m), 
-                  median_pm25 = mean(median_pm25), 
-                  median_pm10 = mean(median_pm10), 
-                  population = mean(population), 
-                  density = mean(density))
+        summarise(uvb = mean(uvb, na.rm = TRUE), 
+                  t2m = mean(t2m, na.rm = TRUE), 
+                  median_pm25 = mean(median_pm25, na.rm = TRUE), 
+                  median_pm10 = mean(median_pm10, na.rm = TRUE), 
+                  population = mean(population, na.rm = TRUE), 
+                  density = mean(density, na.rm = TRUE))
       
       models_rsqr[j, "k"] <- models[i, "k"]
       models_rsqr[j, "k_sd"] <- models[i, "k_sd"]
@@ -471,8 +475,21 @@ for(city in cities){
   i <- i + 1
 }
 
-#summary(lm(y ~ x, df))$r.squared
-# Falta fazer as médias acima ignorarem os na e calcular os r^2 pra cada par lag mvavg
+#r2 <- function(x, y) return(as.numeric(summary(lm(y ~ x, df))$r.squared))
+r2 <- function(x, y) return(lm(y ~ x, df))
+
+r2_df <- models_rsqr %>%
+  group_by(lag, mvavg) %>%
+  do(r2_pm_25 = summary(lm(pm_25 ~ v, data =.))$r.squared) %>%
+  mutate(r2_pm_25 = extract2(r2_pm_25, 1))
+
+r2_df %>%
+  ggplot(aes(x = lag, y = mvavg))+
+    geom_raster(aes(fill = r2_pm_25))+
+    geom_tile(alpha = 0, colour = "black")+
+    scale_fill_distiller(palette = "RdBu")+
+    theme_light()+
+    theme(panel.grid.major = element_blank())
 
 ```
 
