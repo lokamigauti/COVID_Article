@@ -3,6 +3,97 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.linear_model import LogisticRegression
 import numpy as np
+
+
+def logistic(t, t0, L, r):
+    return L / (1 + np.exp(-r * (t - t0)))
+
+scenarios = {'PM25 Lag 14': dict(
+slope_inflex = -0.3218,
+std_inflex = 0.1356,
+slope_growth = 0.0017211,
+std_growth = 0.0007892,
+),
+'PM25 Lag 5': dict(
+slope_inflex = -0.3726,
+std_inflex = 0.1413,
+slope_growth = 0.0019073,
+std_growth = 0.0008379,
+),
+
+'PM10 Lag 14': dict(
+slope_inflex = -0.7737,
+std_inflex = 0.6820,
+slope_growth = 0.003349,
+std_growth = 0.002605,
+),
+
+'PM10 Lag 5': dict(
+slope_inflex = -0.6569,
+std_inflex = 0.6487,
+slope_growth = 0.003191,
+std_growth = 0.002428,
+
+)
+}
+
+
+def plot_scenario(scenario_name):
+    scenario = scenarios[scenario_name]
+    dpm = 20
+    std_inflex = scenario['std_inflex']
+    slope_inflex = scenario['slope_inflex']
+    slope_growth = scenario['slope_growth']
+    std_growth = scenario['std_growth']
+    base_t0 = 30
+    base_r = 0.16735
+    new_t0 = base_t0 + slope_inflex * dpm
+    new_t0_std1 = base_t0 + slope_inflex * dpm + std_inflex * dpm
+    new_t0_std2 = base_t0 + slope_inflex * dpm - std_inflex * dpm
+
+    new_r = base_r + slope_growth * dpm
+    new_r_std1 = base_r + slope_growth * dpm + std_growth * dpm
+    new_r_std2 = base_r + slope_growth * dpm - std_growth * dpm
+
+    ts = np.arange(0, 100, 1)
+
+    y1 = logistic(ts, base_t0, 100, base_r)
+
+    y2 = logistic(ts, new_t0, 100, new_r)
+    y2_std1 = logistic(ts, new_t0_std1, 100, new_r_std2)
+
+    y2_std2 = logistic(ts, new_t0_std2, 100, new_r_std1)
+
+
+    plt.style.use('seaborn-white')
+    plt.plot(ts[1:], np.diff(y1))
+    plt.plot(ts[1:], np.diff(y2))
+    plt.plot(ts[1:], np.diff(y2_std1), color='k', linestyle='--', alpha=0.5)
+    plt.plot(ts[1:], np.diff(y2_std2), color='k', linestyle='--',  alpha=0.5)
+    plt.legend(['Scenario 1', 'Scenario 2', 'Scenario 2 + std. deviation', 'Scenario 2 - std. deviation'])
+    plt.ylabel('Daily new cases (% of total population)')
+    plt.xlabel('Time since first case (days)')
+    plt.savefig(f'figs/new_cases_{scenario_name}.pdf')
+    plt.close()
+    plt.style.use('seaborn-white')
+    plt.plot(ts, (y1))
+    plt.plot(ts, (y2))
+    plt.plot(ts, (y2_std1), color='k', linestyle='--', alpha=0.5)
+    plt.plot(ts, (y2_std2), color='k', linestyle='--',  alpha=0.5)
+    plt.legend(['Scenario 1', 'Scenario 2', 'Scenario 2 + std. deviation', 'Scenario 2 - std. deviation'])
+    plt.ylabel('Total cases (% of total population)')
+    plt.xlabel('Time since first case (days)')
+    plt.savefig(f'figs/total_cases_{scenario_name}.pdf')
+    plt.close()
+
+
+for scenario_name in scenarios.keys():
+    plot_scenario(scenario_name)
+
+
+
+
+
 ds = pd.read_csv('data/corr_df.csv')
 ds = ds.set_index(['mavgs', 'lags'])
 

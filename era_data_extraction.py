@@ -81,6 +81,7 @@ if __name__ == '__main__':
         'tmp': 'tmp_2m_ERA5_6hr_{year}010100-{year}123118.nc',
         'direct_solar_radiation': 'direct_solar_radiation_sfc_ERA5_6hr_{year}010100-{year}123118.nc'
     }
+    cities = pd.read_csv('data/uscities.csv')
 
     quarentine = pd.read_csv('data/quarentine_USA.csv', sep=';')
     path_to_files = Path('~/phd/data/ERA5/')
@@ -90,10 +91,10 @@ if __name__ == '__main__':
     dist_threshold = 1
     datasets_by_location = []
     states = jHopkins.Province_State.values
-    locations = jHopkins.Admin2.values
-
+    aqi_cities = aqi['City'].unique()
 
     for state in states:
+        print(f'*----- Doing state {state} -----*')
         try:
             quarentine_date = quarentine.loc[quarentine['State'].str.contains(state)]['Effective Stay Home'].values[0]
             quarentine_date = quarentine_date + '/2020'
@@ -103,70 +104,97 @@ if __name__ == '__main__':
             quarentine_date = pd.to_datetime(day + '/' + month + '/' + year, format='%d/%b/%Y')
         except:
             quarentine_date = pd.to_datetime('01/Jan/2090', format='%d/%b/%Y' )
-        for location in locations:
+        counties_in_state = cities.loc[cities['state_name'] == state]['county_name'].unique()
+        print(counties_in_state)
 
-            if location in aqi['City'].unique():
+        for county in counties_in_state:
+            cities_in_state = cities.loc[cities['state_name'] == state]
 
-                print(f'Great, {location} exists in both datasets')
-                lat, lon = aqi_metadata[location]
+            cities_in_county = cities_in_state.loc[cities_in_state['county_name'] == county]
+            # print('There are {} cities in county {}'.format(str(cities_in_county.shape[0]), county))
+            jH = jHopkins.sel(Province_State=state).where(jHopkins.Admin2 == county, drop=True)
+            jH = jH.dropna('time', how='all')
+            if jH.time.values.shape[0] == 0:
+                print(f'County {county} is empty in the time axis.')
+                break
 
-                jH = jHopkins.sel(Province_State=state).where(jHopkins.Admin2 == location, drop=True)
-                jH = jH.dropna('time', how='all')
-                if jH.time.values.shape[0] > 0:
-                    jHlat = jH.isel(time=0, Admin2=0).Lat.values
-                    jHlon = jH.isel(time=0, Admin2=0).Long_.values
-                    dist = ((jHlat - lat) ** 2 + (jHlon - lon) ** 2) ** 0.5
-                    jH = jH.drop('Province_State')
+            if jH.Admin2.values.shape[0] == 0:
+                print(f'State {state} has only one conty: {county}')
+                jHlat = jH.isel(time=0).Lat.values
+                jHlon = jH.isel(time=0).Long_.values
+            else:
+                jHlat = jH.isel(time=0, Admin2=0).Lat.values
+                jHlon = jH.isel(time=0, Admin2=0).Long_.values
+            city = None
+            print('Cities in county are: ')
+            print(cities_in_county['city'].values)
+            for _city in cities_in_county['city'].values:
 
-                    d = dataset.sel(latitude=lat, longitude=lon, method='nearest')
-                    if dist.min() < dist_threshold:
-                        jH = jH['cases']
-                        d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
-                        d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
-                        d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
-                        d = d.sortby('time')
-                        d = d.resample(time='1D').mean()
+                if _city in aqi_cities:
+                    print(f'City {_city} matches.')
 
-                        aqi_temp = aqi.loc[aqi['City'] == location][['Specie','median', 'Date']].set_index('Date').to_xarray().rename(
-                            {'Date': 'time'})
-                        aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
-                        aqi_temp = aqi_temp.sortby('time')
-                        aqi_temp = xr.merge([
-                                aqi_temp.where(aqi_temp.Specie == 'pm10', drop=True)['median'].rename('median_pm10'),
-                                aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['median'].rename('median_pm25'),
-                        ])
-
-                        aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
-                        jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[lat], longitude=[lon])
-                        jH.name = 'covid_cases'
-
-                        jH_diff = jH.differentiate('time', datetime_unit='D').where(jH > 5, 0)
-
-                        jH_diff.name = 'covid_cases_first_derivative'
-                        jH_diff2 = jH_diff.differentiate('time', datetime_unit='D').where(jH > 5, 0)
-                        jH_diff2.name = 'covid_cases_second_derivative'
-                        jH = jH.to_dataset()
-                        jH = jH.isel(Admin2=0).drop('Admin2')
-                        jH_diff = jH_diff.to_dataset()
-                        jH_diff = jH_diff.isel(Admin2=0).drop('Admin2')
-                        jH_diff2 = jH_diff2.to_dataset()
-                        jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
-                        try:
-                            d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2])
-                            d = d.isel(latitude=0, longitude=0)
-                            d = d.assign_coords(location_name=location)
-                            d['is_quarentined'] = ('time'), [True if x > quarentine_date else False for x in
-                                                             d.time.values]
-                            datasets_by_location.append(d)
-                        except:
-                            print('Could not merge datasets')
-                            pass
+                    aqilat, aqilon = aqi_metadata[_city]
+                    dist = ((jHlat - aqilat) ** 2 + (jHlon - aqilon) ** 2) ** 0.5
+                    if dist > dist_threshold:
+                        print(f'{_city} is too far, probably belongs to a different state.')
                     else:
-                        print('Too bad, aqi and jH points are too far off.')
-                else:
-                    print(f'Too bad, jHopkins data for {location} is empty')
-        else:
-            print(f'Too bad, {location} is not available in the aqi dataset.')
+                        city = _city
+
+            if isinstance(city, type(None)):
+                print(f'There is no aqi data for county {county}')
+            else:
+                d = dataset.sel(latitude=aqilat, longitude=aqilon, method='nearest')
+                jH = jH['cases']
+                d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
+                d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
+                d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
+                d = d.sortby('time')
+                d = d.resample(time='1D').mean()
+
+
+                aqi_temp = aqi.loc[aqi['City'] == city][['Specie', 'median', 'Date']].set_index(
+                    'Date').to_xarray().rename(
+                    {'Date': 'time'})
+                aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
+                aqi_temp = aqi_temp.sortby('time')
+                aqi_temp = xr.merge([
+                    aqi_temp.where(aqi_temp.Specie == 'pm10', drop=True)['median'].rename('median_pm10'),
+                    aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['median'].rename('median_pm25'),
+                ])
+
+                aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(
+                    latitude=[aqilat],
+                    longitude=[aqilon],
+
+                )
+                jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[aqilat], longitude=[aqilon])
+                jH.name = 'covid_cases'
+
+                jH_diff = jH.differentiate('time', datetime_unit='D').where(jH > 5, 0)
+
+                jH_diff.name = 'covid_cases_first_derivative'
+                jH_diff2 = jH_diff.differentiate('time', datetime_unit='D').where(jH > 5, 0)
+                jH_diff2.name = 'covid_cases_second_derivative'
+                jH = jH.to_dataset()
+                jH = jH.isel(Admin2=0).drop('Admin2')
+                jH_diff = jH_diff.to_dataset()
+                jH_diff = jH_diff.isel(Admin2=0).drop('Admin2')
+                jH_diff2 = jH_diff2.to_dataset()
+                jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
+                try:
+                    d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2])
+                    d = d.assign_coords(location_name=city)
+                    d = d.assign_coords(population=cities_in_county.loc[cities_in_county['city']==city]['population'].values)
+                    d = d.assign_coords(density=cities_in_county.loc[cities_in_county['city']==city]['density'].values)
+                    d = d.isel(latitude=0, longitude=0, population=0, density=0)
+
+                    d['is_quarentined'] = ('time'), [True if x > quarentine_date else False for x in
+                                                     d.time.values]
+                    datasets_by_location.append(d)
+                except:
+                    print('Could not merge datasets')
+                    pass
+
 
     datasets_by_location = xr.concat(datasets_by_location, dim='location_name')
     # datasets_by_location.to_dataframe().to_csv('data/meteorological_variables.csv')

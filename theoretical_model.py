@@ -30,7 +30,7 @@ def run_simulation(particulate, dt=1/24, ndays=365, popsize=8.6e6, removal_rate=
     for t in range(nt - 1):
         R[t + 1] = R[t] + dt * alpha*I[t]
         I[t + 1] = I[t] + dt * (
-                [t]*S[t]*I[t] -alpha*I[t])
+                beta[t]*S[t]*I[t] -alpha*I[t])
         S[t + 1] = S[t] - dt * beta[t]*S[t]*I[t]
     return R, I, S, beta
 
