@@ -152,14 +152,18 @@ if __name__ == '__main__':
                 d = d.resample(time='1D').mean()
 
 
-                aqi_temp = aqi.loc[aqi['City'] == city][['Specie', 'median', 'Date']].set_index(
+                aqi_temp = aqi.loc[aqi['City'] == city][['Specie', 'median','min', 'max', 'Date']].set_index(
                     'Date').to_xarray().rename(
                     {'Date': 'time'})
                 aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
                 aqi_temp = aqi_temp.sortby('time')
                 aqi_temp = xr.merge([
                     aqi_temp.where(aqi_temp.Specie == 'pm10', drop=True)['median'].rename('median_pm10'),
+                    aqi_temp.where(aqi_temp.Specie == 'pm10', drop=True)['min'].rename('min_pm10'),
+                    aqi_temp.where(aqi_temp.Specie == 'pm10', drop=True)['max'].rename('max_pm10'),
                     aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['median'].rename('median_pm25'),
+                    aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['min'].rename('min_pm25'),
+                    aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['max'].rename('max_pm25'),
                 ])
 
                 aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(
@@ -186,6 +190,7 @@ if __name__ == '__main__':
                     d = d.assign_coords(location_name=city)
                     d = d.assign_coords(population=cities_in_county.loc[cities_in_county['city']==city]['population'].values)
                     d = d.assign_coords(density=cities_in_county.loc[cities_in_county['city']==city]['density'].values)
+                    d = d.assign_coords(state=state)
                     d = d.isel(latitude=0, longitude=0, population=0, density=0)
 
                     d['is_quarentined'] = ('time'), [True if x > quarentine_date else False for x in
