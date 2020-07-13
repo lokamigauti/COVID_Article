@@ -1,12 +1,14 @@
 """
 Script to extract meteorological data from ERA5 reanalysis.
 """
+import matplotlib.pyplot as plt
 import xarray as xr
 from pathlib import Path
 import pandas as pd
 import urllib.request, json
 import numpy as np
-import locale
+
+
 def read_era(path_to_files, vars_filenames):
     """
     Method to read and preprocess the ncdf files
@@ -39,11 +41,11 @@ def read_era(path_to_files, vars_filenames):
     return dataset
 
 
-
 def find_nearest(array, value):
     array = np.asarray(array)
     idx = (np.abs(array - value)).argmin()
     return array[idx]
+
 
 def read_aqi():
     path_to_aqi = 'data/waqi-covid19-airqualitydata.csv'
@@ -65,6 +67,7 @@ def read_aqi():
         aqi['longitude'].where(aqi['City'] != city, other=aqi_metadata[city][1], inplace=True)
     return aqi, aqi_metadata
 
+
 def read_JHopkins():
     url = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv'
     data = pd.read_csv(url)
@@ -73,6 +76,7 @@ def read_JHopkins():
     data = data.set_index(['Province_State', 'Admin2', 'time']).to_xarray()
     data = data.assign_coords(time=[pd.Timestamp(x) for x in data.time.values])
     return data
+
 
 if __name__ == '__main__':
 
@@ -151,7 +155,6 @@ if __name__ == '__main__':
                 d = d.sortby('time')
                 d = d.resample(time='1D').mean()
 
-
                 aqi_temp = aqi.loc[aqi['City'] == city][['Specie', 'median','min', 'max', 'Date']].set_index(
                     'Date').to_xarray().rename(
                     {'Date': 'time'})
@@ -173,20 +176,38 @@ if __name__ == '__main__':
                 )
                 jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[aqilat], longitude=[aqilon])
                 jH.name = 'covid_cases'
-
-                jH_diff = jH.differentiate('time', datetime_unit='D').where(jH > 5, 0)
-
+                jH = jH.sortby('time')
+                jH_diff = jH.rolling(time=20, center=True).mean().differentiate('time', datetime_unit='D')
                 jH_diff.name = 'covid_cases_first_derivative'
-                jH_diff2 = jH_diff.differentiate('time', datetime_unit='D').where(jH > 5, 0)
-                jH_diff2.name = 'covid_cases_second_derivative'
+                jH_diff2 = jH_diff.differentiate('time', datetime_unit='D')
+                jH_diff2 = jH_diff2.rolling(time=20, center=True).mean()
+
+                diff_values = jH_diff2.isel( latitude=0, longitude=0, Admin2=0)
+                group = 0
+                outbreak_phase = []
+                last_sign = 0
+
+                for x in diff_values:
+                    if np.sign(x) < 0:
+                        last_sign = -1
+                    elif np.sign(x) >= 0:
+                        if last_sign == -1:
+                            group = group + 1
+                        last_sign = 1
+                    outbreak_phase.append(group)
+
+                outbreak_phase = jH_diff2.copy(data=np.array(outbreak_phase).reshape(jH_diff2.shape))
+                outbreak_phase.name = 'outbreak_phase'
+                outbreak_phase = outbreak_phase.to_dataset().isel(Admin2=0).drop('Admin2')
                 jH = jH.to_dataset()
                 jH = jH.isel(Admin2=0).drop('Admin2')
                 jH_diff = jH_diff.to_dataset()
                 jH_diff = jH_diff.isel(Admin2=0).drop('Admin2')
+                jH_diff2.name = 'covid_cases_second_derivative'
                 jH_diff2 = jH_diff2.to_dataset()
                 jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
                 try:
-                    d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2])
+                    d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2, outbreak_phase])
                     d = d.assign_coords(location_name=city)
                     d = d.assign_coords(population=cities_in_county.loc[cities_in_county['city']==city]['population'].values)
                     d = d.assign_coords(density=cities_in_county.loc[cities_in_county['city']==city]['density'].values)
