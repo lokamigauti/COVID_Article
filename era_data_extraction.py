@@ -53,7 +53,9 @@ def read_aqi():
     aqi = aqi.loc[aqi['Country'] == 'US']
     aqi25 = aqi.loc[aqi['Specie'] == 'pm25']
     aqi10 = aqi.loc[aqi['Specie'] == 'pm10']
-    aqi = pd.concat([aqi25, aqi10], axis=0)
+    aqino2 = aqi.loc[aqi['Specie'] == 'no2']
+    aqiso2 = aqi.loc[aqi['Specie'] == 'so2']
+    aqi = pd.concat([aqi25, aqi10, aqino2, aqiso2], axis=0)
     with urllib.request.urlopen("https://aqicn.org/data-platform/covid19/airquality-covid19-cities.json") as url:
         data = json.loads(url.read().decode())
 
@@ -167,6 +169,8 @@ if __name__ == '__main__':
                     aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['median'].rename('median_pm25'),
                     aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['min'].rename('min_pm25'),
                     aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['max'].rename('max_pm25'),
+                    aqi_temp.where(aqi_temp.Specie == 'no2', drop=True)['median'].rename('median_no2'),
+                    aqi_temp.where(aqi_temp.Specie == 'so2', drop=True)['median'].rename('median_so2'),
                 ])
 
                 aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(
@@ -177,12 +181,16 @@ if __name__ == '__main__':
                 jH = jH.expand_dims(['latitude', 'longitude']).assign_coords(latitude=[aqilat], longitude=[aqilon])
                 jH.name = 'covid_cases'
                 jH = jH.sortby('time')
-                jH_diff = jH.rolling(time=20, center=True).mean().differentiate('time', datetime_unit='D')
-                jH_diff.name = 'covid_cases_first_derivative'
-                jH_diff2 = jH_diff.differentiate('time', datetime_unit='D')
-                jH_diff2 = jH_diff2.rolling(time=20, center=True).mean()
 
-                diff_values = jH_diff2.isel( latitude=0, longitude=0, Admin2=0)
+                jH_diff_smooth = jH.rolling(time=20, center=True).mean().differentiate('time', datetime_unit='D')
+                jH_diff = jH.differentiate('time', datetime_unit='D')
+                jH_diff_smooth.name = 'covid_cases_first_derivative_smooth'
+                jH_diff.name = 'covid_cases_first_derivative'
+                jH_diff2_smooth = jH_diff_smooth.differentiate('time', datetime_unit='D')
+                jH_diff2 = jH_diff.differentiate('time', datetime_unit='D')
+                jH_diff2_smooth = jH_diff2_smooth.rolling(time=20, center=True).mean()
+
+                diff_values = jH_diff2_smooth.isel(latitude=0, longitude=0, Admin2=0)
                 group = 0
                 outbreak_phase = []
                 last_sign = 0
@@ -196,18 +204,23 @@ if __name__ == '__main__':
                         last_sign = 1
                     outbreak_phase.append(group)
 
-                outbreak_phase = jH_diff2.copy(data=np.array(outbreak_phase).reshape(jH_diff2.shape))
+                outbreak_phase = jH_diff2_smooth.copy(data=np.array(outbreak_phase).reshape(jH_diff2_smooth.shape))
                 outbreak_phase.name = 'outbreak_phase'
                 outbreak_phase = outbreak_phase.to_dataset().isel(Admin2=0).drop('Admin2')
                 jH = jH.to_dataset()
                 jH = jH.isel(Admin2=0).drop('Admin2')
+                jH_diff_smooth = jH_diff_smooth.to_dataset()
+                jH_diff_smooth = jH_diff_smooth.isel(Admin2=0).drop('Admin2')
                 jH_diff = jH_diff.to_dataset()
-                jH_diff = jH_diff.isel(Admin2=0).drop('Admin2')
+                jH_diff= jH_diff.isel(Admin2=0).drop('Admin2')
+                jH_diff2_smooth.name = 'covid_cases_second_derivative_smooth'
                 jH_diff2.name = 'covid_cases_second_derivative'
+                jH_diff2_smooth = jH_diff2_smooth.to_dataset()
+                jH_diff2_smooth = jH_diff2_smooth.isel(Admin2=0).drop('Admin2')
                 jH_diff2 = jH_diff2.to_dataset()
                 jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
                 try:
-                    d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2, outbreak_phase])
+                    d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2, jH_diff_smooth, jH_diff2_smooth, outbreak_phase])
                     d = d.assign_coords(location_name=city)
                     d = d.assign_coords(population=cities_in_county.loc[cities_in_county['city']==city]['population'].values)
                     d = d.assign_coords(density=cities_in_county.loc[cities_in_county['city']==city]['density'].values)
