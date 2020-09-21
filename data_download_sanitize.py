@@ -54,8 +54,8 @@ def read_aqi():
     aqi25 = aqi.loc[aqi['Specie'] == 'pm25']
     aqi10 = aqi.loc[aqi['Specie'] == 'pm10']
     aqino2 = aqi.loc[aqi['Specie'] == 'no2']
-    aqiso2 = aqi.loc[aqi['Specie'] == 'so2']
-    aqi = pd.concat([aqi25, aqi10, aqino2, aqiso2], axis=0)
+    aqico = aqi.loc[aqi['Specie'] == 'co']
+    aqi = pd.concat([aqi25, aqi10, aqino2, aqico], axis=0)
     with urllib.request.urlopen("https://aqicn.org/data-platform/covid19/airquality-covid19-cities.json") as url:
         data = json.loads(url.read().decode())
 
@@ -73,7 +73,7 @@ def read_aqi():
 def read_JHopkins():
     url = 'https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_time_series/time_series_covid19_confirmed_US.csv'
     data = pd.read_csv(url)
-    data = data.drop(['UID', 'iso2', 'iso3', 'FIPS', 'Combined_Key', 'Country_Region', 'code3'], axis=1)
+    data = data.drop(['UID', 'iso3', 'iso2' ,'FIPS', 'Combined_Key', 'Country_Region', 'code3'], axis=1)
     data = data.melt(id_vars=['Province_State', 'Admin2', 'Lat', 'Long_'], value_name='cases', var_name='time')
     data = data.set_index(['Province_State', 'Admin2', 'time']).to_xarray()
     data = data.assign_coords(time=[pd.Timestamp(x) for x in data.time.values])
@@ -81,7 +81,7 @@ def read_JHopkins():
 
 
 if __name__ == '__main__':
-
+    use_era5 = False
     vars_filenames = {  # Dictionary mapping variables and their filenames
         'uv': 'UV_sfc_ERA5_6hr_{year}010100-{year}123118.nc',
         'tmp': 'tmp_2m_ERA5_6hr_{year}010100-{year}123118.nc',
@@ -91,7 +91,8 @@ if __name__ == '__main__':
 
     quarentine = pd.read_csv('data/quarentine_USA.csv', sep=';')
     path_to_files = Path('~/phd/data/ERA5/')
-    dataset = read_era(path_to_files, vars_filenames)
+    if use_era5:
+        dataset = read_era(path_to_files, vars_filenames)
     aqi, aqi_metadata = read_aqi()
     jHopkins = read_JHopkins()
     dist_threshold = 1
@@ -149,15 +150,16 @@ if __name__ == '__main__':
             if isinstance(city, type(None)):
                 print(f'There is no aqi data for county {county}')
             else:
-                d = dataset.sel(latitude=aqilat, longitude=aqilon, method='nearest')
+                if use_era5:
+                    d = dataset.sel(latitude=aqilat, longitude=aqilon, method='nearest')
+                    d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
+                    d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
+                    d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
+                    d = d.sortby('time')
+                    d = d.resample(time='1D').mean()
                 jH = jH['cases']
-                d1 = d.where(d.expver == 1, drop=True).squeeze('expver').drop('expver')
-                d5 = d.where(d.expver == 5, drop=True).squeeze('expver').drop('expver')
-                d = xr.concat([d1.dropna('time'), d5.dropna('time')], dim='time')
-                d = d.sortby('time')
-                d = d.resample(time='1D').mean()
 
-                aqi_temp = aqi.loc[aqi['City'] == city][['Specie', 'median','min', 'max', 'Date']].set_index(
+                aqi_temp = aqi.loc[aqi['City'] == city][['Specie', 'median', 'min', 'max', 'Date']].set_index(
                     'Date').to_xarray().rename(
                     {'Date': 'time'})
                 aqi_temp = aqi_temp.assign_coords(time=[pd.Timestamp(x) for x in aqi_temp.time.values])
@@ -170,7 +172,7 @@ if __name__ == '__main__':
                     aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['min'].rename('min_pm25'),
                     aqi_temp.where(aqi_temp.Specie == 'pm25', drop=True)['max'].rename('max_pm25'),
                     aqi_temp.where(aqi_temp.Specie == 'no2', drop=True)['median'].rename('median_no2'),
-                    aqi_temp.where(aqi_temp.Specie == 'so2', drop=True)['median'].rename('median_so2'),
+                    aqi_temp.where(aqi_temp.Specie == 'co', drop=True)['median'].rename('median_co'),
                 ])
 
                 aqi_temp = aqi_temp.expand_dims(['latitude', 'longitude']).assign_coords(
@@ -188,7 +190,7 @@ if __name__ == '__main__':
                 jH_diff.name = 'covid_cases_first_derivative'
                 jH_diff2_smooth = jH_diff_smooth.differentiate('time', datetime_unit='D')
                 jH_diff2 = jH_diff.differentiate('time', datetime_unit='D')
-                jH_diff2_smooth = jH_diff2_smooth.rolling(time=20, center=True).mean()
+                # jH_diff2_smooth = jH_diff2_smooth.rolling(time=20, center=True).mean()
 
                 diff_values = jH_diff2_smooth.isel(latitude=0, longitude=0, Admin2=0)
                 group = 0
@@ -220,7 +222,10 @@ if __name__ == '__main__':
                 jH_diff2 = jH_diff2.to_dataset()
                 jH_diff2 = jH_diff2.isel(Admin2=0).drop('Admin2')
                 try:
-                    d = xr.merge([d, aqi_temp, jH, jH_diff, jH_diff2, jH_diff_smooth, jH_diff2_smooth, outbreak_phase])
+                    arrays_to_merge = [aqi_temp, jH, jH_diff, jH_diff2, jH_diff_smooth, jH_diff2_smooth, outbreak_phase]
+                    if use_era5:
+                        arrays_to_merge.append(d)
+                    d = xr.merge(arrays_to_merge)
                     d = d.assign_coords(location_name=city)
                     d = d.assign_coords(population=cities_in_county.loc[cities_in_county['city']==city]['population'].values)
                     d = d.assign_coords(density=cities_in_county.loc[cities_in_county['city']==city]['density'].values)
@@ -236,19 +241,4 @@ if __name__ == '__main__':
 
 
     datasets_by_location = xr.concat(datasets_by_location, dim='location_name')
-    # datasets_by_location.to_dataframe().to_csv('data/meteorological_variables.csv')
     datasets_by_location.to_dataframe().to_csv('data/meteorological_variables_daily_mean.csv')
-    # datasets_by_location.resample(time='1D').mean().to_netcdf('data/dataset.nc')
-    #
-    # aqi['median']
-    #
-    #
-    #
-    # df.loc[df['column_name'] == some_value]
-    # aqi = aqi.set_index(['Date', 'Country', 'City'])
-    # aqi.to_xarray()
-    # import matplotlib.pyplot as plt
-    # plt.style.use('seaborn')
-    # datasets_by_location['uvb'].sel(expver=1).plot.line(x='time')
-    # plt.show()
-    # datasets_by_location['uvb'].sel(expver=1).resample(time='1D').mean().plot.line(x='time')
