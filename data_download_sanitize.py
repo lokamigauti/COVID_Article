@@ -189,20 +189,24 @@ if __name__ == '__main__':
                 jH_diff_smooth.name = 'covid_cases_first_derivative_smooth'
                 jH_diff.name = 'covid_cases_first_derivative'
                 jH_diff2_smooth = jH_diff_smooth.differentiate('time', datetime_unit='D')
+                jH_diff2_smooth = jH_diff2_smooth.rolling(time=20, center=True).mean()
                 jH_diff2 = jH_diff.differentiate('time', datetime_unit='D')
+
                 # jH_diff2_smooth = jH_diff2_smooth.rolling(time=20, center=True).mean()
 
                 diff_values = jH_diff2_smooth.isel(latitude=0, longitude=0, Admin2=0)
+                cases = jH.isel(latitude=0, longitude=0, Admin2=0).values
                 group = 0
                 outbreak_phase = []
                 last_sign = 0
 
-                for x in diff_values:
+                for x, cases in zip(diff_values, cases):
                     if np.sign(x) < 0:
                         last_sign = -1
-                    elif np.sign(x) >= 0:
+                    elif np.sign(x) > 0:
                         if last_sign == -1:
-                            group = group + 1
+                            if cases > 5:
+                                group = group + 1
                         last_sign = 1
                     outbreak_phase.append(group)
 
