@@ -11,7 +11,8 @@ import matplotlib.pyplot as plt
 import cartopy
 import cartopy.feature as cfeature
 import cmasher as cmr
-from GrangerCausality.tools.causality import GrangerCausality, NotEnoughContinuousData, NotEnoughData
+from GrangerCausality.tools.causality import GrangerCausality,\
+    NotEnoughContinuousData, NotEnoughData, NonStationaryError
 import matplotlib
 
 
@@ -82,11 +83,12 @@ for predictor in ds.predictors.Variable.values:
         da_y = da_y / np.abs(da_y.max('time'))
         da_x = da_x.sortby('time')
         da_y = da_y.sortby('time')
+        # da_y = da_y.diff('time')
         gc = GrangerCausality(sampledim='time', featuredim='Variable')
         try:
             pvalue_array = gc.run(da_x, da_y, detrend=True, granger_test='ssr_ftest', testtype='ct',
-                                  test_stationarity=True, maxlag=17, critical_level='5%')
-        except (ValueError, NotEnoughContinuousData, NotEnoughData):
+                                  maxlag=20, critical_level='5%')
+        except (ValueError, NotEnoughContinuousData, NotEnoughData, NonStationaryError):
             failed_locations += 1
         else:
             pvalue_array['location_name'] = location
@@ -255,7 +257,7 @@ for idx, var in enumerate(variables):
     ax.coastlines(linewidth=.25)
     ax.add_feature(cartopy.feature.BORDERS, linewidth=.5)
     ax.add_feature(states_provinces, edgecolor='gray', linewidth=.25)
-    # ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.LAND)
     ax.add_feature(cfeature.OCEAN)
     ax.gridlines(linewidth=.25)
     ax.set_title(f'{subtitles[idx]}) {variable}', loc='left')
@@ -263,7 +265,9 @@ for idx, var in enumerate(variables):
 
     p = ax.scatter(x=xs.values, y=ys.values, s=4, #s=df[['90% quantile']]**1.5,
                    c=da_granger.sel(Variable=variable).min('lags').values,
-               transform=ccrs.PlateCarree(),  alpha=1, vmin=0, vmax=0.2, cmap=cmr.guppy_r)
+                   edgecolor='gray',
+
+               transform=ccrs.PlateCarree(),  alpha=1, vmin=0, vmax=0.2, cmap=cmr.rainforest)
     for idx2, _ in enumerate(da_granger.location_name.values):
         try:
             ax.text(x=xs.values[idx2], fontdict=font_in, y=ys.values[idx2], transform=ccrs.PlateCarree(),
@@ -271,11 +275,56 @@ for idx, var in enumerate(variables):
                     s=str((da_granger.sel(Variable=variable).isel(location_name=idx2).argmin('lags')+1).values.tolist()))
         except:
             pass
-plt.subplots_adjust(hspace=0.2)
+plt.subplots_adjust(hspace=0.3)
 cbar = plt.colorbar(p, ax=axs[ :], orientation='vertical', shrink=.6)
 cbar.ax.set_ylabel('p-value')
 # ax.stock_img()
-plt.savefig('figs/map.png', dpi=400,bbox_inches='tight',
+plt.savefig('figs/map.svg', dpi=400,bbox_inches='tight',
             transparent=True,  pad_inches=0)
 plt.close()
 
+
+matplotlib.rc('font', **font_out)
+xmin=-85
+xmax=-70
+ymin=35
+ymax=45
+locations = ds_total.where((ds_total.latitude > ymin) & (ds_total.latitude < ymax) &
+                           (ds_total.longitude > xmin) & (ds_total.longitude < xmax), drop=True).location_name.values
+
+xs_ = xs.where((xs > xmin) & (xs < xmax) & (ys > ymin) & (ys < ymax), drop=True)
+ys_ = ys.where((xs > xmin) & (xs < xmax) & (ys > ymin) & (ys < ymax), drop=True)
+
+fig, axs = plt.subplots(4, 1, subplot_kw={'projection': ccrs.Orthographic(-100, 35)})
+for idx, var in enumerate(variables):
+    variable = variables[idx]
+    ax = axs.flatten()[idx]
+    ax.coastlines(linewidth=.25)
+    ax.add_feature(cartopy.feature.BORDERS, linewidth=.5)
+    ax.add_feature(states_provinces, edgecolor='gray', linewidth=.25)
+    ax.add_feature(cfeature.LAND)
+    ax.add_feature(cfeature.OCEAN)
+    ax.gridlines(linewidth=.25)
+    ax.set_title(f'{subtitles[idx]}) {variable}', loc='left')
+    locations_ = xs_.location_name.values
+    p = ax.scatter(x=xs_.values,
+                   y=ys_.values, s=5, #s=df[['90% quantile']]**1.5,
+                   c=da_granger.sel(Variable=variable, location_name=xs_.location_name.values).min('lags').values,
+                   edgecolor='gray',
+                   transform=ccrs.PlateCarree(),  alpha=1, vmin=0, vmax=0.2, cmap=cmr.rainforest,
+                  )
+
+    for location in locations:
+        try:
+            ax.text(x=xs_.sel(location_name=location).values, fontdict=font_in, y=ys_.sel(location_name=location).values, transform=ccrs.PlateCarree(),
+                    color='black',
+                    s=str((da_granger.sel(Variable=variable, location_name=location).argmin('lags')+1).values.tolist()))
+        except:
+            pass
+plt.subplots_adjust(hspace=0.3)
+cbar = plt.colorbar(p, ax=axs[ :], orientation='vertical', shrink=.6)
+cbar.ax.set_ylabel('p-value')
+# ax.stock_img()
+plt.savefig('figs/map_eastcoast.png', bbox_inches='tight',
+            transparent=True,  pad_inches=0)
+plt.close()

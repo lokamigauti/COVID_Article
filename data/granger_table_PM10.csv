@@ -1,19 +1,17 @@
 City,State,Density,Lag,p-value,10% quantile,90% quantile
+Miami,Florida,4969.0,5.0,0.0,11.2,26.0
 Jacksonville,Florida,460.0,1.0,0.0,12.0,23.1
 Oklahoma City,Oklahoma,409.0,9.0,0.0,10.0,29.1
 Atlanta,Georgia,1384.0,14.0,0.001,10.0,20.0
+Las Vegas,Nevada,1747.0,19.0,0.007,8.3,28.0
 Boise,Idaho,1045.0,14.0,0.01,6.0,20.0
-Tucson,Arizona,868.0,16.0,0.018,13.7,29.0
 El Paso,Texas,1025.0,11.0,0.024,16.0,33.0
+Indianapolis,Indiana,921.0,18.0,0.049,10.0,25.0
 Los Angeles,California,3295.0,5.0,0.078,10.0,34.2
 Baltimore,Maryland,2917.0,9.0,0.088,6.0,16.0
-Indianapolis,Indiana,921.0,15.0,0.09,10.0,25.0
 Denver,Colorado,1774.0,3.0,0.133,10.0,26.6
-Fresno,California,1781.0,7.0,0.182,8.0,32.7
 San Jose,California,2257.0,4.0,0.187,6.0,23.0
 Omaha,Nebraska,1304.0,1.0,0.23,6.4,30.0
-Las Vegas,Nevada,1747.0,7.0,0.263,8.3,28.0
-Phoenix,Arizona,1212.0,13.0,0.295,11.0,23.0
 Detroit,Michigan,1873.0,2.0,0.3,7.0,20.0
 Hartford,Connecticut,2741.0,3.0,0.349,7.0,17.0
 Chicago,Illinois,4612.0,1.0,0.417,7.0,21.0
