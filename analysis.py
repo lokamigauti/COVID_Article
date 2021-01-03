@@ -33,7 +33,18 @@ slope_inflex = -0.6569,
 std_inflex = 0.6487,
 slope_growth = 0.003191,
 std_growth = 0.002428,
-
+),
+'Boston1': dict(
+slope_inflex = 0,
+std_inflex = 0,
+slope_growth = 0.096,
+std_growth = 0,
+),
+'Boston2': dict(
+slope_inflex = 0,
+std_inflex = 0,
+slope_growth = 0.108,
+std_growth = 0,
 )
 }
 
@@ -45,16 +56,20 @@ def plot_scenario(scenario_name):
     slope_inflex = scenario['slope_inflex']
     slope_growth = scenario['slope_growth']
     std_growth = scenario['std_growth']
-    base_t0 = 30
-    base_r = 0.16735
+    # base_t0 = 30
+    base_t0 = 46.89
+    base_r = 0.096
+    # base_r = 0.16735
     new_t0 = base_t0 + slope_inflex * dpm
+    new_t0 = base_t0
     new_t0_std1 = base_t0 + slope_inflex * dpm + std_inflex * dpm
     new_t0_std2 = base_t0 + slope_inflex * dpm - std_inflex * dpm
-
+    new_t0_std1 = 0
+    new_t0_std2 = 0
     new_r = base_r + slope_growth * dpm
     new_r_std1 = base_r + slope_growth * dpm + std_growth * dpm
     new_r_std2 = base_r + slope_growth * dpm - std_growth * dpm
-
+    new_r = slope_growth
     ts = np.arange(0, 100, 1)
 
     y1 = logistic(ts, base_t0, 100, base_r)
@@ -68,26 +83,26 @@ def plot_scenario(scenario_name):
     plt.style.use('seaborn-white')
     plt.plot(ts[1:], np.diff(y1))
     plt.plot(ts[1:], np.diff(y2))
-    plt.plot(ts[1:], np.diff(y2_std1), color='k', linestyle='--', alpha=0.5)
-    plt.plot(ts[1:], np.diff(y2_std2), color='k', linestyle='--',  alpha=0.5)
+    # plt.plot(ts[1:], np.diff(y2_std1), color='k', linestyle='--', alpha=0.5)
+    # plt.plot(ts[1:], np.diff(y2_std2), color='k', linestyle='--',  alpha=0.5)
     plt.legend(['Scenario 1', 'Scenario 2', 'Scenario 2 + std. deviation', 'Scenario 2 - std. deviation'])
     plt.ylabel('Daily new cases (% of total population)')
     plt.xlabel('Time since first case (days)')
-    plt.savefig(f'figs/new_cases_{scenario_name}.pdf')
+    plt.savefig(f'figs/new_cases_{scenario_name}.pdf', transparent=True, pad_inches=.2,)
     plt.close()
     plt.style.use('seaborn-white')
     plt.plot(ts, (y1))
     plt.plot(ts, (y2))
-    plt.plot(ts, (y2_std1), color='k', linestyle='--', alpha=0.5)
-    plt.plot(ts, (y2_std2), color='k', linestyle='--',  alpha=0.5)
-    plt.legend(['Scenario 1', 'Scenario 2', 'Scenario 2 + std. deviation', 'Scenario 2 - std. deviation'])
+    # plt.plot(ts, (y2_std1), color='k', linestyle='--', alpha=0.5)
+    # plt.plot(ts, (y2_std2), color='k', linestyle='--',  alpha=0.5)
+    plt.legend(['Scenario 1', 'Scenario 2',]) #'Scenario 2 + std. deviation', 'Scenario 2 - std. deviation'])
     plt.ylabel('Total cases (% of total population)')
     plt.xlabel('Time since first case (days)')
-    plt.savefig(f'figs/total_cases_{scenario_name}.pdf')
+    plt.savefig(f'figs/total_cases_{scenario_name}.pdf', transparent=True, pad_inches=.2,)
     plt.close()
 
-
-for scenario_name in scenarios.keys():
+plt.style.use('ggplot')
+for scenario_name in ['Boston2']:
     plot_scenario(scenario_name)
 
 
