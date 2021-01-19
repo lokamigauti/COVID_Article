@@ -204,11 +204,111 @@ df2.to_csv(f'data/granger_table_{vars[1]}.csv', index=False)
 df3.to_csv(f'data/granger_table_{vars[2]}.csv', index=False)
 df4.to_csv(f'data/granger_table_{vars[3]}.csv', index=False)
 
-
-
-
+data = [df1['p-value'], df2['p-value'], df3['p-value'], df4['p-value']]
+data2 = [df1[df1['p-value'] < .05]['Lag'],
+         df2[df2['p-value'] < .05]['Lag'],
+         df3[df3['p-value'] < .05]['Lag'],
+         df4[df4['p-value'] < .05]['Lag']]
+titles = [r'NO$_2$', r'PM$_{2.5}$', r'PM$_{10}$', 'CO']
+plt.style.use('bmh')
+plt.style.use('seaborn-colorblind')
+fig, axs = plt.subplots(1, 2, figsize=[10, 3])
+ax = axs[0]
+ax.set_title('a)', loc='left')
+ax.boxplot(data, labels=titles, showmeans=True, meanline=True)
+ax.hlines(y=0.05, xmin=0.5, xmax=4.5, linestyles='dotted',)# colors='red')
+ax.grid(False)
+ax.set_ylabel('p-value')
+ax.set_xlabel('Pollutant')
+ax = axs[1]
+ax.set_title('b)', loc='left')
+ax.boxplot(data2, labels=titles, showmeans=True, meanline=True)
+ax.grid(False)
+ax.set_ylabel('Optimal lag (days)')
+ax.set_xlabel('Pollutant')
+plt.savefig('figs/boxplot.png', dpi=600, bbox_inches='tight')
+plt.close()
 
 # ---- Plotting ---- #
+import regionmask
+import geopandas as gp
+lon = np.arange(-130, -60, .1)
+lat = np.arange(25, 55, .1)
+
+shppath = 'QGis/cb_2018_us_county_5m/cb_2018_us_county_5m.shp'
+gp_shp = gp.read_file(shppath)
+mask = regionmask.mask_geopandas(gp_shp, lon, lat)
+
+da_p_values = mask.copy(data=np.zeros(mask.shape))
+da_p_values_pm25 = da_p_values.where(da_p_values != 0)  # create nans
+da_p_values_pm10 = da_p_values_pm25.copy()
+da_p_values_co = da_p_values_pm25.copy()
+da_p_values_no2 = da_p_values_pm25.copy()
+coords = zip(ds_total.longitude.values[0], ds_total.latitude.values[0], ds_total.location_name.values)
+for lon, lat, city in coords:
+    county_id = mask.interp(lat=lat, lon=lon, method='nearest').values
+    try:
+        da_p_values_pm25 = da_p_values_pm25.where(mask != county_id, dsss['p-value'].sel(City=city, Variable='PM25').values)
+        da_p_values_pm10 = da_p_values_pm10.where(mask != county_id, dsss['p-value'].sel(City=city, Variable='PM10').values)
+        da_p_values_co = da_p_values_co.where(mask != county_id, dsss['p-value'].sel(City=city, Variable='CO').values)
+        da_p_values_no2 = da_p_values_no2.where(mask != county_id, dsss['p-value'].sel(City=city, Variable='NO2').values)
+    except:
+        pass
+
+da_p_values = xr.concat([da_p_values_pm25, da_p_values_pm10, da_p_values_co, da_p_values_no2],
+                        dim=pd.Index(['PM25', 'PM10', 'CO', 'NO2'], name='Variable'))
+
+da_p_values.name = 'p-values'
+states_provinces = cfeature.NaturalEarthFeature(
+    category='cultural',
+    name='admin_1_states_provinces_lines',
+    scale='50m',
+    facecolor='none')
+plt.style.use('default')
+#  ccrs.Miller works
+#  NearsidePerspective
+da_p_values_binary = da_p_values.where(da_p_values<.05, 0)
+da_p_values_binary = da_p_values_binary.where(da_p_values>=.05, 1)
+da_p_values_binary = da_p_values_binary.where(~xr.ufuncs.isnan(da_p_values))
+da_p_values_binary_ = da_p_values_binary + 1
+da_positive = da_p_values_binary_.coarsen(lat=30, lon=30, boundary='trim').sum()
+da_positive = da_positive.where(da_positive>0)
+
+p = da_positive.plot(col='Variable', col_wrap=2, transform=ccrs.PlateCarree(),
+                            subplot_kws={'projection': ccrs.Miller(), },alpha=.7, levels=[0, 1], colors=['w', 'k'],
+                            add_colorbar=False,figsize=[10, 5])
+titles = [r'a) PM$_{2.5}$',
+          r'b) PM$_{10}$',
+          r'c) CO',
+          r'd) NO$_{2}$']
+
+for idx, ax in enumerate(p.axes.flatten()):
+    # ax.coastlines(linewidths=)
+
+    da_p_values_binary.isel(Variable=idx).plot( cmap=cmr.watermelon_r, vmin=-.1, vmax=1.1,
+                            add_colorbar=False,ax=ax,transform=ccrs.PlateCarree()
+                           )
+    ax.set_title('')
+    ax.set_title(titles[idx], loc='left')
+    ax.add_feature(cartopy.feature.BORDERS, linewidth=.2)
+    ax.add_feature(states_provinces, edgecolor='gray', linewidth=.1)
+    ax.add_feature(cfeature.OCEAN, color='gray')
+    ax.add_feature(cfeature.LAND, color='white')
+    # ax.gridlines(linewidth=.25)
+    ax.set_ylim(25, 55)
+    ax.set_xlim(-125, -62)
+plt.tight_layout(h_pad=0, w_pad=0)
+matplotlib.cm.get_cmap().set_bad(color='red')
+plt.savefig('figs/county_pvalue_map.png', bbox_inches='tight', dpi=600)
+plt.close()
+
+
+dsss_spatial.assign_coords(City=ds_total.stack(points=['latitude', 'longitude']))
+ds_spatial = xr.DataArray(dsss['p-value'])
+ds_total.latitude
+
+
+
 
 plt.style.use('bmh')
 fig, axs = plt.subplots(2, 4, figsize=[8, 4])
@@ -241,11 +341,7 @@ subtitles = ['a', 'b', 'c', 'd']
 xs = ds_total.sel(location_name=da_granger.location_name).isel(time=0).longitude
 ys = ds_total.sel(location_name=da_granger.location_name).isel(time=0).latitude
 avg_pol = ds_total.sel(location_name=da_granger.location_name).median_pm25.mean('time')
-states_provinces = cfeature.NaturalEarthFeature(
-    category='cultural',
-    name='admin_1_states_provinces_lines',
-    scale='50m',
-    facecolor='none')
+
 font_out = {'size': 5}
 font_in = {'size': 4}
 
