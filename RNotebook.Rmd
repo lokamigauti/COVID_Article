@@ -1,0 +1,1408 @@
+---
+title: "COVID Data processing"
+author: "Leonardo Yoshiaki Kamigauti and Gabriel Martins Perez"
+date: "`r format(Sys.time(), '%d %B %Y')`"
+output:
+  html_document:
+    df_print: paged
+---
+R-based script used in the article "INSERT TITLE HERE". Packages version information are in the end of the script.
+
+# Initialization
+```{r, message=FALSE}
+
+# Libraries
+
+library(readr)
+library(tidyverse)
+library(ggrepel)
+library(stats)
+library(nlstools)
+library(SimDesign)
+library(ggpubr)
+
+# Functions
+
+lm_eqn1 <- function(df){ # Print linear reg. equation and R-squared
+  colnames(df) <- c("x", "y")
+  m <- lm(y ~ x, df);
+  eq <- substitute(italic(y) == a + b %.% italic(x)*","~~italic(R)^2~"="~r2, 
+       list(a = format(unname(coef(m)[1]), digits = 2),
+            b = format(unname(coef(m)[2]), digits = 2),
+           r2 = format(summary(m)$r.squared, digits = 3)))
+  as.character(as.expression(eq));
+}
+lm_eqn2 <- function(df){ # Print Pearson's correlation and p-value (non-zero corr. null hypo.)
+  colnames(df) <- c("x", "y")
+  m <- lm(y ~ x, df);
+  corr <- cor.test(x = df$x, y = df$y, method = "pearson")
+  eq <- substitute(italic(R)~"="~pearsonr~","~~italic(p)~"="~rp, 
+       list(pearsonr = format(as.numeric(corr$estimate), digits = 3),
+           rp = format(corr$p.value, digits = 3)))
+  as.character(as.expression(eq));
+}
+find_resolution <- function(df){ # Estimates the resolution of the data
+  df <- (na.omit(df))
+  ifelse(as.numeric(length(df)) < 10, return(NA), df <- unique(df[order(df, na.last = TRUE)]))
+  df_res <- max(df)
+  df <- df[df < quantile(df, probs =  0.8) & df > quantile(df, probs =  0.2)]
+  if(length(df) == 0) return(NA)
+  for(i in 1:(length(df)-1)){
+    df_res <- if_else(df_res > df[i+1]-df[i], df[i+1]-df[i], df_res)
+  }
+  df_res
+}
+boot_mean <- function(data, idx){ # mean function w/ index to bootstrap
+  mean(data[idx])
+}
+boot_quantile_90 <- function(data, idx){ # quantile function w/ index to bootstrap
+  quantile(data[idx], probs = 0.9)
+}
+boot_quantile_10 <- function(data, idx){ # quantile function w/ index to bootstrap
+  quantile(data[idx], probs = 0.1)
+}
+mean_conf <- function(data, nint){
+  data <- na.omit(data)
+  if(all(is.na(data))) {return(rep(NA_real_, 5))}
+  else{
+    bs <- boot::boot(data = data, statistic = boot_mean, R = nint)
+    out <- boot::boot.ci(bs, type = "perc")
+    ifelse(all(is.na(out)), return(rep(NA_real_, 5)), return(out$percent))
+  }
+}
+mean_conf_up <- function(data, nint = 10000){ # Calculate the upper confidence interval with 95% confidence 
+  mean_conf(data, nint)[5]
+}
+mean_conf_lo <- function(data, nint = 10000){ # Calculate the lower confidence interval with 95% confidence 
+  mean_conf(data, nint)[4]
+}
+quantile_conf_90 <- function(data, nint){
+  data <- na.omit(data)
+  if(all(is.na(data))) return(rep(NA_real_, 5))
+  bs <- boot::boot(data = data, statistic = boot_quantile_90, R = nint)
+  out <- boot::boot.ci(bs, type = "perc")
+  if_else(all(is.na(out)), return(rep(NA_real_, 5)), return(out$percent))
+}
+quantile_conf_90_up <- function(data, nint = 10000){ # Calculate the upper confidence interval with 95% confidence 
+  quantile_conf_90(data, nint)[5]
+}
+quantile_conf_90_lo <- function(data, nint = 10000){ # Calculate the lower confidence interval with 95% confidence 
+  quantile_conf_90(data, nint)[4]
+}
+quantile_conf_10 <- function(data, nint){
+  data <- na.omit(data)
+  if(all(is.na(data))) return(rep(NA_real_, 5))
+  bs <- boot::boot(data = data, statistic = boot_quantile_10, R = nint)
+  out <- boot::boot.ci(bs, type = "perc")
+  if_else(all(is.na(out)), return(rep(NA_real_, 5)), return(out$percent))
+}
+quantile_conf_10_up <- function(data, nint = 10000){ # Calculate the upper confidence interval with 95% confidence 
+  quantile_conf_10(data, nint)[5]
+}
+quantile_conf_10_lo <- function(data, nint = 10000){ # Calculate the lower confidence interval with 95% confidence 
+  quantile_conf_10(data, nint)[4]
+}
+`%notin%` <- Negate(`%in%`) # Usefull shorthand
+
+set.seed(123)
+```
+# Data import and quality control
+```{r}
+# Import
+
+ds <- read_csv("meteorological_variables_daily_mean.csv", # Import csv (see sup.material)
+    col_types = cols(time = col_datetime(format = "%Y-%m-%d"),
+                     outbreak_phase = col_double()))
+ds$covid_cases[is.na(ds$covid_cases)] <- 0 # Atrib. 0 cases before pandemic
+ds <- ds %>%
+  mutate(outbreak_phase = as.factor(outbreak_phase)) %>% # Outbreak phases as factors
+  filter(time < as.Date("2020-07-15")) %>% # Set final day of analysis
+  mutate(outbreak_phase = as.factor(if_else(as.numeric(outbreak_phase) == 1, as.numeric(1), as.numeric(2)))) %>% # Define only the outbreak phases as "first wave (1) and the subsequent (2)"
+  mutate(median_co = if_else(location_name == "Honolulu" & median_co == 58.0, NA_real_, median_co)) %>% # Honolulu data fix
+  mutate(median_no2 = if_else(location_name == "Staten Island" & median_no2 > 100, NA_real_, median_no2)) # Staten Island data fix (greater no2 concentration is 116.9, second is 48.2)
+
+# Auxiliary information
+
+cities <- ds %>% # Get city names
+  group_by(location_name) %>%
+  summarize(case = max(covid_cases)) %>%
+  mutate(location_name = ifelse(case < 300, NA, location_name)) %>%
+  na.omit() %>%
+  pull(location_name) %>%
+  as.vector()
+
+data_quali <- data.frame()
+for(city in cities){ # Make a "day" variable that counts the days in relation to the 5th case
+  data1 <- ds %>%
+    filter(location_name == city) %>%
+    filter(covid_cases > 5) %>% # After 5th case
+    mutate(day = 1:nrow(.)) # Positive
+  data2 <- ds %>%
+    filter(location_name == city) %>%
+    filter(covid_cases <= 5) %>% #Before 5th case
+    mutate(day = -(nrow(.)-1):0) # Negative
+  data_a <- rbind(data2, data1) %>%
+    mutate(Period = as.factor(ifelse(day > 1, "Epidemic", "Pre-epidemic")))
+  data_quali <- rbind(data_quali, data_a)
+}
+rm(data1, data2, data_a)
+
+# Data quality
+
+data_quali <- data_quali %>% # Quality analysis of all datasets
+  group_by(location_name) %>%
+  summarise(pm25_totalcoverage = 1-(sum(is.na(median_pm25))/n()), # Coverage in the total analysis period
+            pm10_totalcoverage = 1-(sum(is.na(median_pm10))/n()),
+            no2_totalcoverage = 1-(sum(is.na(median_no2))/n()),
+            co_totalcoverage = 1-(sum(is.na(median_co))/n()),
+            
+            pm25_epicoverage = 1-(sum(is.na(median_pm25[Period == "Epidemic"]))/sum(Period == "Epidemic")), # Coverage after 5th case
+            pm10_epicoverage = 1-(sum(is.na(median_pm10[Period == "Epidemic"]))/sum(Period == "Epidemic")),
+            no2_epicoverage = 1-(sum(is.na(median_no2[Period == "Epidemic"]))/sum(Period == "Epidemic")),
+            co_epicoverage = 1-(sum(is.na(median_co[Period == "Epidemic"]))/sum(Period == "Epidemic")),
+            
+            pm25_res = find_resolution(median_pm25), # Estimated equipment resolution
+            pm10_res = find_resolution(median_pm10),
+            no2_res = find_resolution(median_no2),
+            co_res = find_resolution(median_co),
+            
+            exclude_pm25 = if_else(pm25_epicoverage > 0.8 & pm25_totalcoverage > 0.7 & (pm25_res <= 1 | !is.na(pm25_res)), F, T), # Does the data do not meet the data quality criteria?
+            exclude_pm10 = if_else(pm10_epicoverage > 0.8 & pm10_totalcoverage > 0.7 & (pm10_res <= 1 | !is.na(pm10_res)), F, T),
+            exclude_no2 = if_else(no2_epicoverage > 0.8 & no2_totalcoverage > 0.7 & (no2_res <= 1 | !is.na(no2_res)), F, T),
+            exclude_co = if_else(co_epicoverage > 0.8 & co_totalcoverage > 0.7 & co_res <= 1 & !is.na(co_res), F, T))
+
+excluded <- list()
+
+excluded$pm25 <- data_quali %>% # List the cities that pollutant dataset do not meet the data quality criteria above
+  filter(exclude_pm25 == TRUE) %>%
+  .$location_name
+
+excluded$pm10 <- data_quali %>%
+  filter(exclude_pm10 == TRUE) %>%
+  .$location_name
+
+excluded$no2 <- data_quali %>%
+  filter(exclude_no2 == TRUE) %>%
+  .$location_name
+
+excluded$co <- data_quali %>%
+  filter(exclude_co == TRUE) %>%
+  .$location_name
+
+excluded$aggregated <- unique(c(excluded$pm25, excluded$pm10, excluded$no2, excluded$co)) # List all cities that a pollutant dataset do not meet the criteria
+
+excluded$dataset <- table(c(excluded$pm25, excluded$pm10, excluded$no2, excluded$co)) %>% # List all cities that all pollutants do not meet the criteria and exclude them from the dataset
+  as.data.frame %>%
+  filter(Freq == 4) %>% # NUMBER OF POLLUTANTS, ALTER IF ADD ANOTHER POLLUTANT
+  select(Var1) %>%
+  lapply(as.character)
+cities <- cities[cities %notin% c(excluded$dataset$Var1)]
+ds <- filter(ds, location_name %in% cities)
+
+```
+# Data Description and Visualization
+## Dataset Description
+```{r}
+library(summarytools)
+sumy <- ds %>%
+  transmute(County = as.factor(location_name),
+         State = as.factor(Province_State),
+         Day = time,
+         PM10 = median_pm10,
+         PM25 = median_pm25,
+         NO2 = median_no2,
+         CO = median_co,
+         COVID_Cases = covid_cases)
+print(dfSummary(sumy), file = "DatasetSummary.txt")
+```
+## COVID-19 Cases
+```{r}
+ds %>%
+    select(covid_cases, covid_cases_first_derivative_smooth, location_name, outbreak_phase) %>%
+    group_by(location_name) %>%
+    filter(covid_cases > 5) %>%
+    mutate(day = 1:n()) %>%
+    na.omit() %>%
+    mutate(covid_cases=scales::rescale(covid_cases,to=c(0, 1)),
+         covid_cases_first_derivative_smooth=sentimentr::general_rescale(covid_cases_first_derivative_smooth,lower = -1, upper = 1, keep.zero = TRUE)) %>%
+    select(covid_cases, covid_cases_first_derivative_smooth, outbreak_phase, day, location_name) %>%
+    ggplot(aes(x = day)) +
+    geom_line(aes(y = covid_cases), color = "black", size = 1)+
+    geom_line(aes(y = covid_cases_first_derivative_smooth, color = outbreak_phase), size = 1)+
+    scale_color_brewer(palette = "Paired")+
+    guides(color=guide_legend(title="Outbreak Phase"))+
+    xlab("Day") + ylab("Normalized Cases")+
+    ggtitle("Daily [color] and Accumulated [black] COVID-19 Cases") +
+    facet_wrap(~location_name)+
+    theme_pubr()
+ggsave("daily_and_accumulated_cases.pdf", width = 20, height = 10)
+```
+## Pollutants
+```{r}
+data_viz <- data.frame()
+for(city in cities){ # Make same day variable as in data_quali and name the Epidemic and Pre-epidemic periods
+
+  data_viz1 <- ds %>%
+    filter(location_name == city) %>%
+    filter(covid_cases > 5) %>%
+    mutate(day = 1:nrow(.)) %>%
+    mutate(location_name = city)
+
+  data_viz2 <- ds %>%
+    filter(location_name == city) %>%
+    filter(covid_cases <= 5) %>%
+    mutate(day = -(nrow(.)-1):0) %>%
+    mutate(location_name = city)
+
+  data_viz3 <- rbind(data_viz2, data_viz1) %>%
+    mutate(Period = as.factor(ifelse(day > 1, "Epidemic", "Pre-epidemic")))
+  
+  data_viz <- rbind(data_viz, data_viz3)
+}
+
+rm(data_viz1, data_viz2, data_viz3)
+```
+
+```{r}
+data_viz %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  select(median_pm25, location_name, Period, time) %>%
+  group_by(location_name) %>%
+  na.omit() %>%
+  ggplot(aes(x = time)) +
+  geom_col(aes(y = median_pm25, fill = Period))+
+  guides(color=guide_legend(title=""))+
+  xlab("Day") + ylab("Median PM2.5 (ug/m³)")+
+  ggtitle("Daily Median PM2.5") +
+  facet_wrap(~location_name)+
+  theme_pubr()
+ggsave("dataset_mp25.pdf", width = 7, height = 5)
+
+data_viz %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  select(median_pm10, location_name, Period, time) %>%
+  group_by(location_name) %>%
+  na.omit() %>%
+  ggplot(aes(x = time)) +
+  geom_col(aes(y = median_pm10, fill = Period))+
+  guides(color=guide_legend(title=""))+
+  xlab("Day") + ylab("Median PM10 (ug/m³)")+
+  ggtitle("Daily Median PM10") +
+  facet_wrap(~location_name)+
+  theme_pubr()
+ggsave("dataset_mp10.pdf", width = 7, height = 5)
+
+data_viz %>%
+  filter(location_name %notin% excluded$no2) %>%
+  select(median_no2, location_name, Period, time) %>%
+  group_by(location_name) %>%
+  na.omit() %>%
+  ggplot(aes(x = time)) +
+  geom_col(aes(y = median_no2, fill = Period))+
+  guides(color=guide_legend(title=""))+
+  xlab("Day") + ylab("Median NO2 (ppm)")+
+  ggtitle("Daily Median NO2") +
+  facet_wrap(~location_name)+
+  theme_pubr()
+ggsave("dataset_no2.pdf", width = 7, height = 5)
+
+data_viz %>%
+  filter(location_name %notin% excluded$co) %>%
+  select(median_co, location_name, Period, time) %>%
+  group_by(location_name) %>%
+  na.omit() %>%
+  ggplot(aes(x = time)) +
+  geom_col(aes(y = median_co, fill = Period))+
+  guides(color=guide_legend(title=""))+
+  xlab("Day") + ylab("Median CO (ppm)")+
+  ggtitle("Daily Median CO") +
+  facet_wrap(~location_name)+
+  theme_pubr()
+ggsave("dataset_co.pdf", width = 7, height = 5)
+```
+## Reduction Coef.
+```{r}
+reduction <- data_viz %>% # Calculate the ratio between the two early months average of outbreak and the two before, if less than 1 there were a reduction
+  group_by(location_name) %>%
+  filter(day > -60, day < 60) %>%
+  summarise(pm25_reduction = mean(ifelse(Period == "Pre-epidemic", median_pm25, NA), na.rm = T),
+            pm25_reduction = mean(ifelse(Period == "Epidemic", median_pm25, NA), na.rm = T)/pm25_reduction,
+            pm10_reduction = mean(ifelse(Period == "Pre-epidemic", median_pm10, NA), na.rm = T),
+            pm10_reduction = mean(ifelse(Period == "Epidemic", median_pm10, NA), na.rm = T)/pm10_reduction,
+            no2_reduction = mean(ifelse(Period == "Pre-epidemic", median_no2, NA), na.rm = T),
+            no2_reduction = mean(ifelse(Period == "Epidemic", median_no2, NA), na.rm = T)/no2_reduction,
+            co_reduction = mean(ifelse(Period == "Pre-epidemic", median_co, NA), na.rm = T),
+            co_reduction = mean(ifelse(Period == "Epidemic", median_co, NA), na.rm = T)/co_reduction)
+
+reduction %>% # LaTeX table export because nobody deserve to write those manually
+  xtable::xtable(type = "latex") %>%
+  print(file = "reduction_coef.tex")
+```
+# Statistics
+## Modeling
+```{r}
+##### DO NOT RUN #####
+## manual init variables mapping
+#
+# city <- "Fresno" # Choose a city to map the initial variables
+#
+# data_training <- ds %>% #subset the data to fit the logistic curve
+#   select(covid_cases, population, location_name, outbreak_phase) %>%
+#   filter(location_name == city) %>%
+#   filter(covid_cases > 5) %>%
+#   mutate(day = 1:nrow(.)) %>%
+#   filter(outbreak_phase == 1) %>%
+#   na.omit() %>%
+#   select(covid_cases, population, day)
+# a <- F
+# for(v_point in seq(0, 1, 0.01)){ #try the growth rate parameter between 0 and 1 by 0.01 steps
+#   for(inf_point in 1:200){ #try the inflection point day between 1 and 200
+#     tryCatch(
+#       print(nls(covid_cases ~ I(population*k/(1+exp(-v*(day-inflex)))), data = data_training, start = list(k = 0.0040081, v = v_point, inflex = inf_point), control = list(maxiter = 10000))), # Test the model
+#       error=function(e){a <- T}) # Did it do not coverge?
+#     if(a == T){ # Print the variables if so
+#       print(cat(c(inf_point, v_point), sep = ","))
+#       a <- F
+#     }
+#   }
+# }
+```
+
+```{r}
+
+# Modeling
+
+i = 1
+models <- data.frame(location_name = NA, k = NA, k_sd = NA, k_t = NA, k_p = NA, v = NA, v_sd = NA, v_t = NA, v_p = NA)
+mplot <- data.frame(day = NA, covid_cases = NA, model_predict = NA, location_name = NA)
+
+for(city in cities){ # Run modelling routine to each city
+  
+  models[i, "location_name"] <- city
+  
+  data_training <- ds %>% # Get city covid_cases
+    select(covid_cases, population, location_name, outbreak_phase) %>%
+    filter(location_name == city) %>%
+    filter(covid_cases > 5) %>%
+    mutate(day = 1:nrow(.)) %>%
+    filter(outbreak_phase == 1) %>%
+    na.omit() %>%
+    select(covid_cases, population, day)
+  
+  inf_point <- case_when( # Here you manually put the inflection points
+    city == "Oklahoma City" ~ 20,
+    city == "Tallahassee" ~ 20,
+    city == "Staten Island" ~ 30,
+    city == "Manhattan" ~ 34,
+    city == "Queens" ~ 35,
+    city == "Phoenix" ~ 111,
+    TRUE ~ 37.66 # This is the mean inflection point to a initial subset, so this number encompass many cases
+  )
+  
+  tryCatch(currentmodel <- nls(covid_cases ~ I(population*k/(1+exp(-v*(day-inflex)))), data = data_training, start = list(k = 0.0040081, v = 0.11420, inflex = inf_point), control = list(maxiter = 10000)), error = function(e) NA) # Logistic model fitting by non-linear least squares. k is an estimative to the ratio of sintomatic population, inflex is the inflection point of the logistic curve and v is the logistic growth (r in the article)
+
+  
+  if(length(currentmodel) == 1){ # If the model do not converged
+    models[i,"k"] <- NA
+    models[i,"k_sd"] <- NA
+    models[i,"k_t"] <- NA
+    models[i,"k_p"] <- NA
+    models[i,"v"] <- NA
+    models[i,"v_sd"] <- NA
+    models[i,"v_t"] <- NA
+    models[i,"v_p"] <- NA
+  }
+  else{
+    models[i,"k"] <- summary(currentmodel)$coefficients[1,1]
+    models[i,"k_sd"] <- summary(currentmodel)$coefficients[1,2]
+    models[i,"k_t"] <- summary(currentmodel)$coefficients[1,3]
+    models[i,"k_p"] <- summary(currentmodel)$coefficients[1,4]
+    models[i,"v"] <- summary(currentmodel)$coefficients[2,1]
+    models[i,"v_sd"] <- summary(currentmodel)$coefficients[2,2]
+    models[i,"v_t"] <- summary(currentmodel)$coefficients[2,3]
+    models[i,"v_p"] <- summary(currentmodel)$coefficients[2,4]
+    models[i,"inflex"] <- summary(currentmodel)$coefficients[3,1]
+    models[i,"inflex_sd"] <- summary(currentmodel)$coefficients[3,2]
+    models[i,"inflex_t"] <- summary(currentmodel)$coefficients[3,3]
+    models[i,"inflex_p"] <- summary(currentmodel)$coefficients[3,4]
+    
+    # Shapiro-Wilks test to data normally distributed around the fitted curve
+    
+    res <- nlsResiduals(currentmodel) # Get residuals
+    stdres <- res$resi2[,2]
+	  shapi	<- shapiro.test(stdres) # Calc S-W statistics
+	  models[i,"shapiro_W"] <- shapi$statistic["W"]
+	  models[i,"shapiro_p"] <- shapi$p.value # Get p-value with normal distribution null hypothesis
+	  
+	  # Root Mean Square Error calculation
+
+	  er <- RMSE(estimate = data_training$covid_cases, parameter = as.vector(predict(currentmodel, newdata = data_training)), type = 'NRMSE')
+	  models[i,"rmse"] <- er
+	  
+	  # Make a easy set to plot the models
+	  
+	  modelploting <- data_training %>%
+	    select(covid_cases, day)
+	  modelploting[,"model_predict"] <- predict(currentmodel, newdata = data_training)
+	  modelploting[,"location_name"] <- rep(city, nrow(modelploting))
+	  mplot <- rbind(mplot, modelploting)
+    
+    currentmodel <- NA
+    
+  }
+  
+  i <- i + 1
+}
+rm(data_training, res, stdres, shapi, currentmodel, er, i, inf_point, modelploting)
+
+# Quality control
+
+models <- models %>%
+  filter(inflex_sd < 3, shapiro_p < 0.1) # Filter the data that do not have a good fit to the inflection point and do not pass S-W test
+
+# Model visualization
+
+mplot[-1,] %>%
+  filter(location_name %in% models$location_name) %>%
+  ggplot(aes(x = day)) +
+  geom_line(aes(y = model_predict), color = "blue")+
+  geom_point(aes(y = covid_cases), size = 0.5)+
+  xlab("Day") + ylab("Cases")+
+  facet_wrap(~location_name, scales = "free")+
+  theme_pubr()
+
+ggsave("model.pdf", width = 20, height = 10)
+
+
+summary(models)
+```
+## Lags analysis
+May take several minutes
+```{r, message=FALSE, warning=FALSE}
+nint = 1000
+lags = 0:30
+first = T
+for(nlag in lags){ # Make a dataset with the different possible lags between the COVID-19 cases and the pollutant emissions
+  data_agregate <- ds %>%
+    group_by(location_name) %>%
+    mutate(median_pm25 = lag(median_pm25, n = nlag)) %>% # Lag the data by 'nlag' days
+    mutate(min_pm25 = lag(min_pm25, n = nlag)) %>%
+    mutate(max_pm25 = lag(max_pm25, n = nlag)) %>%
+    mutate(median_pm10 = lag(median_pm10, n = nlag)) %>%
+    mutate(min_pm10 = lag(min_pm10, n = nlag)) %>%
+    mutate(max_pm10 = lag(max_pm10, n = nlag)) %>%
+    mutate(median_no2 = lag(median_no2, n = nlag)) %>%
+    mutate(median_co = lag(median_co, n = nlag)) %>%
+    filter(covid_cases > 5) %>% # Get the Epidemic period
+    filter(outbreak_phase == 1) %>%
+    summarise(median_no2_sd = sd(median_no2, na.rm = TRUE), # Calculate the standard deviation of the pollutant concentration in the period
+              median_co_sd = sd(median_co, na.rm = TRUE),
+              median_pm25_sd = sd(median_pm25, na.rm = TRUE), 
+              min_pm25_sd = sd(min_pm25, na.rm = TRUE),
+              max_pm25_sd = sd(max_pm25, na.rm = TRUE),
+              median_pm10_sd = sd(median_pm10, na.rm = TRUE),
+              min_pm10_sd = sd(min_pm10, na.rm = TRUE),
+              max_pm10_sd = sd(max_pm10, na.rm = TRUE),
+              
+              median_no2_lo = mean_conf_lo(median_no2, nint), # Calculate the bootstrap lower confidence interval
+              median_co_lo = mean_conf_lo(median_co, nint),
+              median_pm25_lo = mean_conf_lo(median_pm25, nint), 
+              max_pm25_lo = mean_conf_lo(max_pm25, nint),
+              min_pm25_lo = mean_conf_lo(min_pm25, nint),
+              median_pm10_lo = mean_conf_lo(median_pm10, nint),
+              min_pm10_lo = mean_conf_lo(min_pm10, nint),
+              max_pm10_lo = mean_conf_lo(max_pm10, nint),
+              
+              median_no2_up = mean_conf_up(median_no2, nint), # Calculate the bootstrap upper confidence interval
+              median_co_up = mean_conf_up(median_co, nint),
+              median_pm25_up = mean_conf_up(median_pm25, nint), 
+              max_pm25_up = mean_conf_up(max_pm25, nint),
+              min_pm25_up = mean_conf_up(min_pm25, nint),
+              median_pm10_up = mean_conf_up(median_pm10, nint),
+              min_pm10_up = mean_conf_up(min_pm10, nint),
+              max_pm10_up = mean_conf_up(max_pm10, nint),
+              
+              median_no2_90 = quantile(median_no2, probs = 0.9, na.rm = TRUE), # Calculate the 90% quantile of the pollutant concentration in the period
+              median_co_90 = quantile(median_co, probs = 0.9, na.rm = TRUE),
+              median_pm25_90 = quantile(median_pm25, probs = 0.9, na.rm = TRUE), 
+              max_pm25_90 = quantile(max_pm25, probs = 0.9, na.rm = TRUE),
+              min_pm25_90 = quantile(min_pm25, probs = 0.9, na.rm = TRUE),
+              median_pm10_90 = quantile(median_pm10, probs = 0.9, na.rm = TRUE),
+              min_pm10_90 = quantile(min_pm10, probs = 0.9, na.rm = TRUE),
+              max_pm10_90 = quantile(max_pm10, probs = 0.9, na.rm = TRUE),
+              
+              median_no2_10 = quantile(median_no2, probs = 0.1, na.rm = TRUE), # Calculate the 10% quantile of the pollutant concentration in the period
+              median_co_10 = quantile(median_co, probs = 0.1, na.rm = TRUE),
+              median_pm25_10 = quantile(median_pm25, probs = 0.1, na.rm = TRUE), 
+              max_pm25_10 = quantile(max_pm25, probs = 0.1, na.rm = TRUE),
+              min_pm25_10 = quantile(min_pm25, probs = 0.1, na.rm = TRUE),
+              median_pm10_10 = quantile(median_pm10, probs = 0.1, na.rm = TRUE),
+              min_pm10_10 = quantile(min_pm10, probs = 0.1, na.rm = TRUE),
+              max_pm10_10 = quantile(max_pm10, probs = 0.1, na.rm = TRUE),
+              
+              median_no2 = mean(median_no2, na.rm = TRUE), # Calculate the average pollutant concentration in the period
+              median_co = mean(median_co, na.rm = TRUE),
+              median_pm25 = mean(median_pm25, na.rm = TRUE), 
+              max_pm25 = mean(max_pm25, na.rm = TRUE),
+              min_pm25 = mean(min_pm25, na.rm = TRUE),
+              median_pm10 = mean(median_pm10, na.rm = TRUE), 
+              min_pm10 = mean(min_pm10, na.rm = TRUE),
+              max_pm10 = mean(max_pm10, na.rm = TRUE),
+              
+              population = mean(population, na.rm = TRUE), 
+              density = mean(density, na.rm = TRUE))
+  
+  if(first == T){
+    models_rsqr <- left_join(data_agregate, models)
+    models_rsqr[,"lag"] <- rep(nlag, length(cities))
+  } 
+  else{
+    a <- left_join(data_agregate, models)
+    a[,"lag"] <- rep(nlag, length(cities))
+    models_rsqr <- rbind(models_rsqr, a)
+  }
+  first = F
+}
+
+results <- left_join(models_rsqr, data_quali[c("location_name", "pm25_res", "pm10_res", "no2_res", "co_res")], by = "location_name")
+results <- left_join(results, reduction, by = "location_name")
+```
+# Import Granger analysis from Python script
+```{r, message=FALSE}
+a <- cities %>% # Assign a number to each city to better visualization in the plots
+  as.data.frame
+colnames(a) <- "location_name"
+a <- rowid_to_column(a, "ID")
+
+results <- left_join(results, a, by = "location_name")
+
+rm(data_agregate, models_rsqr, first, lags, a, nlag)
+  
+# Import the Granger data from Python script
+
+granger <- list()
+granger$pm25 <- read_csv("granger_table_PM25.csv", col_types = cols(City = col_character()))
+granger$pm10 <- read_csv("granger_table_PM10.csv", col_types = cols(City = col_character()))
+granger$no2 <- read_csv("granger_table_NO2.csv", col_types = cols(City = col_character()))
+granger$co <- read_csv("granger_table_CO.csv", col_types = cols(City = col_character()))
+
+granger$pm25$pollutant <- "pm25"
+granger$pm10$pollutant <- "pm10"
+granger$no2$pollutant <- "no2"
+granger$co$pollutant <- "co"
+
+granger$pm25 <- granger$pm25 %>%
+  rename("pm25_granger_p_value" = "p-value") %>%
+  rename("pm25_q10" = "10% quantile") %>%
+  rename("pm25_q90" = "90% quantile") %>%
+  rename("location_name" = "City")
+granger$pm10 <- granger$pm10 %>%
+  rename("pm10_granger_p_value" = "p-value") %>%
+  rename("pm10_q10" = "10% quantile") %>%
+  rename("pm10_q90" = "90% quantile") %>%
+  rename("location_name" = "City")
+granger$no2 <- granger$no2 %>%
+  rename("no2_granger_p_value" = "p-value") %>%
+  rename("no2_q10" = "10% quantile") %>%
+  rename("no2_q90" = "90% quantile") %>%
+  rename("location_name" = "City")
+granger$co <- granger$co %>%
+  rename("co_granger_p_value" = "p-value") %>%
+  rename("co_q10" = "10% quantile") %>%
+  rename("co_q90" = "90% quantile") %>%
+  rename("location_name" = "City")
+
+results <- left_join(results, granger$pm25, by = "location_name")
+results <- left_join(results, granger$pm10, by = "location_name")
+results <- left_join(results, granger$no2, by = "location_name")
+results <- left_join(results, granger$co, by = "location_name")
+
+summary(granger$pm25)
+
+granger$pm25 %>%
+  filter(pm25_granger_p_value < 0.1) %>%
+  summary()
+
+granger$pm25 %>%
+  filter(pm25_granger_p_value < 0.1) %>%
+  pull(Lag) %>%
+  as.numeric() %>%
+  sd()
+
+granger$pm10 %>%
+  filter(pm10_granger_p_value < 0.1) %>%
+  summary()
+
+granger$pm10 %>%
+  filter(pm10_granger_p_value < 0.1) %>%
+  pull(Lag) %>%
+  as.numeric() %>%
+  sd()
+
+granger$no2 %>%
+  filter(no2_granger_p_value < 0.1) %>%
+  summary()
+
+granger$no2 %>%
+  filter(no2_granger_p_value < 0.1) %>%
+  pull(Lag) %>%
+  as.numeric() %>%
+  sd()
+
+granger$co %>%
+  filter(co_granger_p_value < 0.1) %>%
+  summary()
+
+granger$co %>%
+  filter(co_granger_p_value < 0.1) %>%
+  pull(Lag) %>%
+  as.numeric() %>%
+  sd()
+
+granger$pm25 %>%
+  filter(pm25_granger_p_value < 0.1) %>%
+  pull(pm25_granger_p_value) %>%
+  as.numeric() %>%
+  hist(breaks = c(0,0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09,0.1),
+       xlim = c(0,0.1),
+       freq = T)
+
+granger$pm10 %>%
+  filter(pm10_granger_p_value < 0.1) %>%
+  pull(pm10_granger_p_value) %>%
+  as.numeric() %>%
+  hist(breaks = c(0,0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09,0.1),
+       xlim = c(0,0.1),
+       freq = T) 
+
+granger$no2 %>%
+  filter(no2_granger_p_value < 0.1) %>%
+  pull(no2_granger_p_value) %>%
+  as.numeric() %>%
+  hist(breaks = c(0,0.001,0.01,0.05,0.1,100),
+       xlim = c(0,0.1),
+       freq = T)
+
+granger$no2 %>%
+  pull(no2_granger_p_value) %>%
+  as.numeric() %>%
+  hist(breaks = seq(0,1,0.05),
+       xlim = c(0,1),
+       freq = F)
+
+granger$co %>%
+  filter(co_granger_p_value < 0.1) %>%
+  pull(co_granger_p_value) %>%
+  as.numeric() %>%
+  hist(breaks = c(0,0.01,0.02,0.03,0.04,0.05,0.06,0.07,0.08,0.09,0.1),
+       xlim = c(0,0.1),
+       freq = T)
+```
+```{r}
+#SI granger
+granger$pm25 %>% transmute(County = location_name, State = State, 'p-value' = pm25_granger_p_value) %>%
+  xtable::xtable(type = "latex") %>%
+  print(file = "GrangerPM25.tex")
+granger$pm10 %>% transmute(County = location_name, State = State, 'p-value' = pm10_granger_p_value) %>%
+  xtable::xtable(type = "latex") %>%
+  print(file = "GrangerPM10.tex")
+granger$co %>% transmute(County = location_name, State = State, 'p-value' = co_granger_p_value) %>%
+  xtable::xtable(type = "latex") %>%
+  print(file = "GrangerCO.tex")
+granger$no2 %>% transmute(County = location_name, State = State, 'p-value' = no2_granger_p_value) %>%
+  xtable::xtable(type = "latex") %>%
+  print(file = "GrangerNO2.tex")
+```
+
+# Results
+## Main Correlations
+```{r}
+p1 <- results %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm25, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm25, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 5)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM2.5")+
+  scale_size_continuous(breaks = c(0.001, 0.01, 0.1, 1), limits = c(0.001,1), trans = scales::log_trans())
+
+p2 <- results %>%
+  filter(location_name %notin% excluded$co) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_co, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_co, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01), color = "#00BFC4") +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 5)) +
+    xlab("Lag (days)") + ylab("R")+
+  ggtitle("r x CO")+
+  scale_size_continuous(breaks = c(0.001, 0.01, 0.1, 1), limits = c(0.001,1), trans = scales::log_trans())
+
+p3 <- results %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_hline(yintercept = 0)+
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 5)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM10")+
+  scale_size_continuous(breaks = c(0.001, 0.01, 0.1, 1), limits = c(0.001,1), trans = scales::log_trans())
+
+p4 <- results %>%
+  filter(location_name %notin% excluded$no2) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_no2, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_no2, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_hline(yintercept = 0)+
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 5)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x NO2")+
+  scale_size_continuous(breaks = c(0.001, 0.01, 0.1, 1), limits = c(0.001,1), trans = scales::log_trans())
+
+ggarrange(p1, p2, p3, p4, # Arrange plots in a single image w/ shared legend
+          labels = c("A", "B", "C", "D"),
+          ncol = 2, nrow = 2,
+          common.legend = TRUE,
+          legend = "right")
+
+ggsave("r_x_pol.pdf", width = 7, height = 5)
+```
+## Poster
+```{r}
+p1 <- results %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm25, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm25, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 5)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM2.5")+
+  scale_size_continuous(breaks = c(0.001, 0.01, 0.1, 1), limits = c(0.001,1), trans = scales::log_trans())
+
+p2 <- results %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_hline(yintercept = 0)+
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 5)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM10")+
+  scale_size_continuous(breaks = c(0.001, 0.01, 0.1, 1), limits = c(0.001,1), trans = scales::log_trans())
+
+ggarrange(p1, p2, # Arrange plots in a single image w/ shared legend
+          labels = c("A", "B", "C", "D"),
+          ncol = 1, nrow = 2,
+          common.legend = TRUE,
+          legend = "right")
+
+ggsave("lag_poster.png", width = 7, height = 5)
+```
+
+## Min and Max PM
+```{r}
+results %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$min_pm25, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$min_pm25, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag (days)") + ylab("R")+
+  ggtitle("r x Minimun PM2.5")
+ggsave("r_x_minpm25.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$max_pm25, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$max_pm25, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag (days)") + ylab("R")+
+  ggtitle("r x Maximun PM2.5")
+ggsave("r_x_maxpm25.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$min_pm10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$min_pm10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag (days)") + ylab("R")+
+  ggtitle("r x Minimun PM10")
+ggsave("r_x_minpm10.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$max_pm10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$max_pm10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag (days)") + ylab("R")+
+  ggtitle("r x Maximun PM10")
+ggsave("r_x_maxpm10.pdf", width = 7, height = 5)
+```
+# 10% quantile
+```{r}
+results %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm25_10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm25_10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM2.5 10% quantile")
+ggsave("r_x_pm25_q10.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm10_10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm10_10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM10 10% quantile")
+ggsave("r_x_pm10_q10.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$no2) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_no2_10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_no2_10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x NO2 10% quantile")
+ggsave("r_x_no2_q10.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$co) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_co_10, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_co_10, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x CO 10% quantile")
+ggsave("r_x_co_q10.pdf", width = 7, height = 5)
+```
+# 90% quantile
+```{r}
+results %>%
+  filter(location_name %notin% excluded$pm25) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm25_90, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm25_90, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM2.5 90% quantile")
+ggsave("r_x_pm25_q90.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$pm10) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_pm10_90, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_pm10_90, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x PM10 90% quantile")
+ggsave("r_x_pm10_q90.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$no2) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_no2_90, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_no2_90, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.1)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x NO2 90% quantile")
+ggsave("r_x_no2_q90.pdf", width = 7, height = 5)
+
+results %>%
+  filter(location_name %notin% excluded$co) %>%
+  group_by(lag) %>%
+  do(r = cor(y = .$v, x = .$median_co_90, use = "complete.obs"),
+     p = cor.test(y = .$v, x = .$median_co_90, na.action = na.omit)$p.value) %>%
+  mutate(r = as.numeric(r), p = as.numeric(p)) %>%
+  ungroup() %>%
+  ggplot(aes(x = lag, y = r)) +
+    geom_line() +
+    geom_point(aes(size = p, color = p < 0.01)) +
+    theme_bw() +
+    theme(panel.grid.minor = element_blank()) +
+    scale_x_continuous(breaks = seq(0, 30, by = 1)) +
+    xlab("Lag [days]") + ylab("R")+
+  ggtitle("r x CO 90% quantile")
+ggsave("r_x_co_q90.pdf", width = 7, height = 5)
+```
+## Linear regressions
+```{r, message=FALSE, warning=FALSE}
+print_specific_lag <- function(lag, results, pollutant, excluded, pollutant_lo, pollutant_up, var, less_than, xtitle, xlim, equation_on_right = T, display_cities = F, location_name = location_name){ # Print the next plots
+  
+  # Create groups with the selected variable compared to an value. In our case it's Granger p-value compared to 0.1 significance. 
+  
+  results <- results %>%
+    mutate(granger_group = ifelse({{var}} > {{less_than}}, paste(">", format({{less_than}})), paste("<", format({{less_than}}))))
+  
+  p <- results %>% # Calculate the linear regression and correlation parameters 
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}) %>%
+    select({{pollutant}}, v)
+  
+  p_gran <- results %>%
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}, granger_group == paste("<", format({{less_than}}))) %>%
+    select({{pollutant}}, v)
+  
+  p_not_gran <- results %>% 
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}, granger_group == paste(">", format({{less_than}}))) %>%
+    select({{pollutant}}, v)
+  
+  # Printing
+  
+  print <- results %>%
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}) %>% # Filter the cities
+    ggplot(aes(x = {{pollutant}}, y = v)) +
+      geom_smooth(method = "lm", se = F, color = "black") + # Linear regression w/ all data
+      geom_smooth(aes(group = granger_group, col = granger_group), method = "lm", se = F) + # Linear regression w/ Granger groups
+      geom_errorbar(aes(ymin = v - v_sd, ymax = v + v_sd), width = 0, alpha = 0.5) + # Error bars of logis. growth
+      geom_errorbarh(aes(xmin = {{pollutant_lo}}, xmax = {{pollutant_up}}), alpha = 0.5) + # Error bars of pollutants, based in the estimation of the instrument precision
+      geom_point(aes(size = {{var}}, color = granger_group), alpha = 0.5) + # The points with color and sizes based in Granger p-value
+      theme_pubr() + # Pretty plot theme
+      xlab({{xtitle}}) + ylab("r (1/day)") + # Axis names
+      xlim({{xlim}}) + # The automatic horizontal placement of the plots seems to be a little wrong, so we did it manually
+      scale_color_manual("Granger p-value", # Legend title
+                           values = c("#00AFBB", "#E7B800", "#FC4E07"), # Colorblindness friendly colors
+                           limits = c(paste("<", format({{less_than}})), paste(">", format({{less_than}})))) +
+      scale_size("",
+                 breaks=c(0.001, 0.01, 0.1, 0.5, 1), # Intuitive breaks
+                 trans = scales::log_trans(0.1)) # Log scale in point 
+  
+  if(display_cities == T){print <- print +
+      geom_text_repel(aes(label = ID))} # City numbers
+  
+  # The equations and parameters can be positioned in the top left or right
+  
+  if(equation_on_right == T){print +
+      annotate("text", -Inf, Inf, label = lm_eqn1(p), hjust = 0, vjust = 1, parse = TRUE)+
+      annotate("text", -Inf, Inf, label = lm_eqn2(p), hjust = 0, vjust = 2.5, parse = TRUE)+
+      annotate("text", -Inf, Inf, label = lm_eqn1(p_gran), hjust = 0, vjust = 2.9, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", -Inf, Inf, label = lm_eqn2(p_gran), hjust = 0, vjust = 5, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", -Inf, Inf, label = lm_eqn1(p_not_gran), hjust = 0, vjust = 4.7, parse = TRUE, colour = "#E7B800")+
+      annotate("text", -Inf, Inf, label = lm_eqn2(p_not_gran), hjust = 0, vjust = 7.3, parse = TRUE, colour = "#E7B800")}
+  else{print +
+      annotate("text", Inf, Inf, label = lm_eqn1(p), hjust = 1, vjust = 1, parse = TRUE)+
+      annotate("text", Inf, Inf, label = lm_eqn2(p), hjust = 1, vjust = 2.5, parse = TRUE)+
+      annotate("text", Inf, Inf, label = lm_eqn1(p_gran), hjust = 1, vjust = 5, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", Inf, Inf, label = lm_eqn2(p_gran), hjust = 1, vjust = 7.5, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", Inf, Inf, label = lm_eqn1(p_not_gran), hjust = 1, vjust = 10, parse = TRUE, colour = "#E7B800")+
+      annotate("text", Inf, Inf, label = lm_eqn2(p_not_gran), hjust = 1, vjust = 12.5, parse = TRUE, colour = "#E7B800")}
+}
+
+p1 <- print_specific_lag(lag = 8,
+                   results = results,
+                   pollutant = median_pm25,
+                   excluded = excluded$pm25,
+                   pollutant_lo = median_pm25_lo,
+                   pollutant_up = median_pm25_up,
+                   var = pm25_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean PM2.5 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(13,48))
+
+p2 <- print_specific_lag(lag = 28,
+                   results = results,
+                   pollutant = median_co,
+                   excluded = excluded$co,
+                   pollutant_lo = median_co_lo,
+                   pollutant_up = median_co_up,
+                   var = co_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean CO (ppm)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(1, 4.75))
+
+p3 <- print_specific_lag(lag = 0,
+                   results = results,
+                   pollutant = median_pm10,
+                   excluded = excluded$pm10,
+                   pollutant_lo = median_pm10_lo,
+                   pollutant_up = median_pm10_up,
+                   var = pm10_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean PM10 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(7,20))
+
+p4 <- print_specific_lag(lag = 28,
+                   results = results,
+                   pollutant = median_no2,
+                   excluded = excluded$no2,
+                   pollutant_lo = median_no2_lo,
+                   pollutant_up = median_no2_up,
+                   var = no2_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean NO2 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(1, 14))
+
+ggarrange(p1, p3, # Arrange plots in a single image w/ shared legend
+          labels = c("A", "B", "C", "D"),
+          ncol = 1, nrow = 2,
+          common.legend = TRUE,
+          legend = "right")
+#ggsave("r_x_pol_lm_pannel_cities_pm.pdf", width = 7, height = 8) # Uncomment to get the plot in the supplementary material
+ggsave("r_x_pol_lm_pannel_pm.pdf", width = 7, height = 8)
+
+# p3 <- print_specific_lag(lag = 1,
+#                    results = results,
+#                    pollutant = median_pm25_10,
+#                    excluded = excluded$pm25,
+#                    pollutant_lo = median_pm25_bs_lo,
+#                    pollutant_up = median_pm25_bs_up,
+#                    var = pm25_granger_p_value,
+#                    less_than = 0.1,
+#                    xtitle = "Mean PM2.5 10% quartile (ug/m³)",
+#                    #display_cities = T, # Uncomment to get the plot in the supplementary material
+#                    xlim = c(8,26))
+# 
+# p4 <- print_specific_lag(lag = 8,
+#                    results = results,
+#                    pollutant = median_co_10,
+#                    excluded = excluded$co,
+#                    res = co_res,
+#                    var = co_granger_p_value,
+#                    less_than = 0.1,
+#                    xtitle = "Mean CO 10% quartile (ppm)",
+#                    #display_cities = T, # Uncomment to get the plot in the supplementary material
+#                    xlim = c(0.1, 4))  
+# 
+# p5 <- print_specific_lag(lag = 11,
+#                    results = results,
+#                    pollutant = median_pm25_90,
+#                    excluded = excluded$pm25,
+#                    res = pm25_res,
+#                    var = pm25_granger_p_value,
+#                    less_than = 0.1,
+#                    xtitle = "Mean PM2.5 90% quartile (ug/m³)",
+#                    #display_cities = T, # Uncomment to get the plot in the supplementary material
+#                    xlim = c(22,63))
+# 
+# p6 <- print_specific_lag(lag = 27,
+#                    results = results,
+#                    pollutant = median_co_90,
+#                    excluded = excluded$co,
+#                    res = co_res,
+#                    var = co_granger_p_value,
+#                    less_than = 0.1,
+#                    xtitle = "Mean CO 90% quartile (ppm)",
+#                    #display_cities = T, # Uncomment to get the plot in the supplementary material
+#                    xlim = c(1.5, 6.5))
+# 
+# ggarrange(p1, p2, p3, p4, p5, p6, # Arrange plots in a single image w/ shared legend
+#           labels = c("A", "B", "C", "D", "E", "F"),
+#           ncol = 2, nrow = 3,
+#           common.legend = TRUE,
+#           legend = "right")
+# ggsave("r_x_pol_lm_pannel_cities.pdf", width = 10, height = 12)
+```
+```{r}
+print_specific_lag <- function(lag, results, pollutant, excluded, pollutant_lo, pollutant_up, var, less_than, xtitle, xlim, equation_on_right = T, display_cities = F, location_name = location_name){ # Print the next plots
+  
+  # Create groups with the selected variable compared to an value. In our case it's Granger p-value compared to 0.1 significance. 
+  
+  results <- results %>%
+    mutate(granger_group = ifelse({{var}} > {{less_than}}, paste(">", format({{less_than}})), paste("<", format({{less_than}}))))
+  
+  p <- results %>% # Calculate the linear regression and correlation parameters 
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}) %>%
+    select({{pollutant}}, inflex)
+  
+  p_gran <- results %>%
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}, granger_group == paste("<", format({{less_than}}))) %>%
+    select({{pollutant}}, inflex)
+  
+  p_not_gran <- results %>% 
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}, granger_group == paste(">", format({{less_than}}))) %>%
+    select({{pollutant}}, inflex)
+  
+  # Printing
+  
+  print <- results %>%
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}) %>% # Filter the cities
+    ggplot(aes(x = {{pollutant}}, y = inflex)) +
+      geom_smooth(method = "lm", se = T, color = "black") + # Linear regression w/ all data
+      geom_smooth(aes(group = granger_group, col = granger_group), method = "lm", se = F) + # Linear regression w/ Granger groups
+      geom_errorbar(aes(ymin = inflex - inflex_sd, ymax = inflex + inflex_sd), width = 0, alpha = 0.5) + # Error bars of logis. growth
+      geom_errorbarh(aes(xmin = {{pollutant_lo}}, xmax = {{pollutant_up}}), alpha = 0.5) + # Error bars of pollutants, based in the estimation of the instrument precision
+      geom_point(aes(size = {{var}}, color = granger_group), alpha = 0.5) + # The points with color and sizes based in Granger p-value
+      theme_pubr() + # Pretty plot theme
+      xlab({{xtitle}}) + ylab("inflex (day)") + # Axis names
+      xlim({{xlim}}) + # The automatic horizontal placement of the plots seems to be a little wrong, so we did it manually
+      scale_color_manual("Granger p-value", # Legend title
+                           values = c("#00AFBB", "#E7B800", "#FC4E07"), # Colorblindness friendly colors
+                           limits = c(paste("<", format({{less_than}})), paste(">", format({{less_than}})))) +
+      scale_size("",
+                 breaks=c(0.001, 0.01, 0.1, 0.5, 1), # Intuitive breaks
+                 trans = scales::log_trans(0.1)) # Log scale in point 
+  
+  if(display_cities == T){print <- print +
+      geom_text_repel(aes(label = ID))} # City numbers
+  
+  # The equations and parameters can be positioned in the top left or right
+  
+  if(equation_on_right == T){print +
+      annotate("text", -Inf, Inf, label = lm_eqn1(p), hjust = 0, vjust = 1, parse = TRUE)+
+      annotate("text", -Inf, Inf, label = lm_eqn2(p), hjust = 0, vjust = 2.5, parse = TRUE)+
+      annotate("text", -Inf, Inf, label = lm_eqn1(p_gran), hjust = 0, vjust = 2.9, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", -Inf, Inf, label = lm_eqn2(p_gran), hjust = 0, vjust = 5, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", -Inf, Inf, label = lm_eqn1(p_not_gran), hjust = 0, vjust = 4.7, parse = TRUE, colour = "#E7B800")+
+      annotate("text", -Inf, Inf, label = lm_eqn2(p_not_gran), hjust = 0, vjust = 7.3, parse = TRUE, colour = "#E7B800")}
+  else{print +
+      annotate("text", Inf, Inf, label = lm_eqn1(p), hjust = 1, vjust = 1, parse = TRUE)+
+      annotate("text", Inf, Inf, label = lm_eqn2(p), hjust = 1, vjust = 2.5, parse = TRUE)+
+      annotate("text", Inf, Inf, label = lm_eqn1(p_gran), hjust = 1, vjust = 5, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", Inf, Inf, label = lm_eqn2(p_gran), hjust = 1, vjust = 7.5, parse = TRUE, colour = "#00AFBB")+
+      annotate("text", Inf, Inf, label = lm_eqn1(p_not_gran), hjust = 1, vjust = 10, parse = TRUE, colour = "#E7B800")+
+      annotate("text", Inf, Inf, label = lm_eqn2(p_not_gran), hjust = 1, vjust = 12.5, parse = TRUE, colour = "#E7B800")}
+}
+
+p1 <- print_specific_lag(lag = 8,
+                   results = results,
+                   pollutant = median_pm25,
+                   excluded = excluded$pm25,
+                   pollutant_lo = median_pm25_lo,
+                   pollutant_up = median_pm25_up,
+                   var = pm25_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean PM2.5 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(13,48))
+
+p2 <- print_specific_lag(lag = 28,
+                   results = results,
+                   pollutant = median_co,
+                   excluded = excluded$co,
+                   pollutant_lo = median_co_lo,
+                   pollutant_up = median_co_up,
+                   var = co_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean CO (ppm)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(1, 4.75))
+
+p3 <- print_specific_lag(lag = 0,
+                   results = results,
+                   pollutant = median_pm10,
+                   excluded = excluded$pm10,
+                   pollutant_lo = median_pm10_lo,
+                   pollutant_up = median_pm10_up,
+                   var = pm10_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean PM10 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(7,20))
+
+p4 <- print_specific_lag(lag = 28,
+                   results = results,
+                   pollutant = median_no2,
+                   excluded = excluded$no2,
+                   pollutant_lo = median_no2_lo,
+                   pollutant_up = median_no2_up,
+                   var = no2_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean NO2 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(1, 14))
+
+ggarrange(p1, p3, # Arrange plots in a single image w/ shared legend
+          labels = c("A", "B", "C", "D"),
+          ncol = 1, nrow = 2,
+          common.legend = TRUE,
+          legend = "right")
+
+p1
+#ggsave("r_x_pol_lm_pannel_cities_pm.pdf", width = 7, height = 8) # Uncomment to get the plot in the supplementary material
+#ggsave("r_x_pol_lm_pannel_pm.pdf", width = 7, height = 8)
+```
+
+# Session Information
+```{r}
+sessionInfo()
+```
+```{r}
+data_viz %>%
+  group_by(location_name) %>%
+  summarise(pm25 = mean(median_pm25, na.rm = T)) %>%
+  arrange(pm25)
+```
+```{r}
+print_specific_lag <- function(lag, results, pollutant, excluded, pollutant_lo, pollutant_up, var, less_than, xtitle, xlim, equation_on_right = T, display_cities = F, location_name = location_name){ # Print the next plots
+  
+  # Create groups with the selected variable compared to an value. In our case it's Granger p-value compared to 0.1 significance. 
+  
+  results <- results %>%
+    mutate(granger_group = ifelse({{var}} > {{less_than}}, paste(">", format({{less_than}})), paste("<", format({{less_than}}))))
+  
+  p <- results %>% # Calculate the linear regression and correlation parameters 
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}) %>%
+    select({{pollutant}}, v)
+  
+  p_gran <- results %>%
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}, granger_group == paste("<", format({{less_than}}))) %>%
+    select({{pollutant}}, v)
+  
+  p_not_gran <- results %>% 
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}, granger_group == paste(">", format({{less_than}}))) %>%
+    select({{pollutant}}, v)
+  
+  # Printing
+  
+  print <- results %>%
+    filter({{location_name}} %notin% {{excluded}}, lag == {{lag}}) %>% # Filter the cities
+    ggplot(aes(x = {{pollutant}}, y = v)) +
+      geom_smooth(method = "lm", se = F, color = "black") + # Linear regression w/ all data
+      geom_smooth(aes(group = granger_group, col = granger_group), method = "lm", se = F) + # Linear regression w/ Granger groups
+      geom_point(aes(size = {{var}}, color = granger_group), alpha = 0.5) + # The points with color and sizes based in Granger p-value
+      theme_pubr() + # Pretty plot theme
+      xlab({{xtitle}}) + ylab("r (1/day)") + # Axis names
+      xlim({{xlim}}) + # The automatic horizontal placement of the plots seems to be a little wrong, so we did it manually
+      scale_color_manual("Granger p-value", # Legend title
+                           values = c("#00AFBB", "#E7B800", "#FC4E07"), # Colorblindness friendly colors
+                           limits = c(paste("<", format({{less_than}})), paste(">", format({{less_than}})))) +
+      scale_size("",
+                 breaks=c(0.001, 0.01, 0.1, 0.5, 1), # Intuitive breaks
+                 trans = scales::log_trans(0.1)) # Log scale in point 
+  
+}
+
+p1 <- print_specific_lag(lag = 8,
+                   results = results,
+                   pollutant = median_pm25,
+                   excluded = excluded$pm25,
+                   pollutant_lo = median_pm25_lo,
+                   pollutant_up = median_pm25_up,
+                   var = pm25_granger_p_value,
+                   less_than = 0.1,
+                   xtitle = "Mean PM2.5 (ug/m³)",
+                   #display_cities = T, # Uncomment to get the plot in the supplementary material
+                   xlim = c(13,48))
+p1
+ggsave("reg_poster_agu.png", width = 7, height = 7)
+```
+
